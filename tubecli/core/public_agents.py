@@ -118,6 +118,12 @@ async def _capcut_tts(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[
     return await resolve(text, opts)
 
 
+async def _chess_move(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from tubecli.core.public_chess import resolve
+
+    return await resolve(text, opts)
+
+
 PUBLIC_SKILLS: Dict[str, PublicSkill] = {
     s.id: s for s in (
         PublicSkill("douyin.resolve", "douyin_downloader", _douyin_resolve),
@@ -130,6 +136,9 @@ PUBLIC_SKILLS: Dict[str, PublicSkill] = {
         # Văn bản → mp3 bằng giọng CapCut (bể tài khoản của chủ). `opts.voice` do cloud
         # chọn từ danh sách cứng; xem core/public_tts.py.
         PublicSkill("capcut.tts", "capcut_tts", _capcut_tts, max_input=700),
+        # MỘT nước cờ mỗi lượt gọi — cloud làm trọng tài, đầu vào là JSON {fen, turn,
+        # history} cloud tự dựng; xem core/public_chess.py.
+        PublicSkill("chess.move", "ai_arena", _chess_move, max_input=4000),
     )
 }
 
@@ -516,6 +525,9 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
     ok = False
     try:
         opts = payload.get("opts") if isinstance(payload.get("opts"), dict) else {}
+        # Skill cần biết agent nào đang trả lời (cờ vua: play-turn lấy model theo agent
+        # Flow). Tiêm Ở ĐÂY, sau xác thực — cloud không gửi và không giả được trường này.
+        opts = {**opts, "_agent_id": agent_id}
         result = await asyncio.wait_for(skill.handler(text, opts), timeout=INVOKE_TIMEOUT_SEC)
         ok = True
         return result
