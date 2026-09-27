@@ -3451,9 +3451,14 @@ _CUE_RE = re.compile(r"\[.*?\]")   # stage directions in brackets are not spoken
 _SPEAKER_LABELS = (r"v\.?\s?o\.?|o\.?\s?s\.?|voice[\s-]?over|narrator|narración|narrador|narrateur"
                    r"|erzähler|sprecher|anlatıcı|narasi|voz en off|người dẫn(?: chuyện)?|lời dẫn|dẫn chuyện"
                    r"|ナレーション|ナレーター|내레이션|나레이션|해설|旁白|解说|解說|рассказчик|закадровый голос")
+# Nhãn LỜI THOẠI kiểu kịch bản «VOZ (Funcionario): "…"» / «VOICE (Lao Tzu): …» / «GIỌNG (Lão Tử): …» — tên người nói
+# trong ngoặc là BẮT BUỘC (chữ «Voz:» trần có thể là câu thật). User 27/9/2026 dán kịch bản thuỷ mặc có dòng
+# «VOZ (Lao Tsé): …» — bản trước đọc to cả «VOZ Lao Tsé».
+_VOICE_WORDS = r"voz|voice|giọng|声|声音|голос|stimme|ses"
 _SPEAKER_LABEL_RE = re.compile(
     r"^\s*(?:(?:\(\s*(?:" + _SPEAKER_LABELS + r")\s*\)\s*[:：\-–—]?"
-    r"|(?:" + _SPEAKER_LABELS + r")(?:\s*\([^)]{0,40}\))?\s*[:：\-–—])\s*)+", re.I | re.U)
+    r"|(?:" + _SPEAKER_LABELS + r")(?:\s*\([^)]{0,40}\))?\s*[:：\-–—]"
+    r"|(?:" + _VOICE_WORDS + r")\s*[(（][^)）]{1,40}[)）]\s*[:：\-–—])\s*)+", re.I | re.U)
 
 
 def _strip_label(text: str) -> str:
@@ -3597,6 +3602,43 @@ def _shot_narration(shot: Dict) -> str:
     text = (shot.get("narration_text") or shot.get("dialogue") or shot.get("description")
             or shot.get("action") or "")
     return _strip_label(_CUE_RE.sub("", str(text))).strip()
+
+
+# Nhịp MỞ ĐẦU (Studio gắn scene.type «hook», hay «title» + cover cho thẻ xem trước): «…» đọc thành khoảng lặng
+# 0,6–0,8 s. Đo #81 (27/9/2026): giọng ngừng 0,7 s ngay sau hai chữ đầu «Un camino.» rồi cứ vài giây lại lặng — đúng
+# những giây người xem quyết định ở lại. Ở đoạn này «…» đọc như dấu phẩy; phụ đề vẫn giữ nguyên chữ của kịch bản.
+_ELLIPSIS_RE = re.compile(r"\s*(?:\.{3,}|…)\s*")
+
+
+def _opening_beat(shot: Dict) -> bool:
+    meta = shot.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta or "{}")
+        except ValueError:
+            meta = {}
+    sc = (meta or {}).get("scene") if isinstance(meta, dict) else None
+    if not isinstance(sc, dict):
+        return False
+    ty = str(sc.get("type") or "").lower()
+    return ty == "hook" or (ty == "title" and bool(sc.get("cover")))
+
+
+def soften_pauses(text: str) -> str:
+    """«A… B» → «A, B»; «…» ở cuối → «.». Không đụng dấu câu khác."""
+    # «…» ngay trước dấu đóng ngoặc/nháy thì là hết câu: thành dấu chấm, không thành «, "».
+    t = re.sub(r"\s*(?:\.{3,}|…)(?=\s*[\"”»’')\]])", ".", str(text or ""))
+    t = _ELLIPSIS_RE.sub(", ", t)
+    t = re.sub(r",\s*([,.!?;:])", r"\1", t).strip()
+    if t.endswith(","):
+        t = t[:-1].rstrip() + "."
+    return re.sub(r"^\s*,\s*", "", t)
+
+
+def _spoken(shot: Dict) -> str:
+    """Chữ GỬI cho giọng đọc: lời của shot, nhịp mở đầu thì khoảng lặng «…» ngắn lại."""
+    text = _shot_narration(shot)
+    return soften_pauses(text) if text and _opening_beat(shot) else text
 
 
 # Giọng CapCut đọc ~13-17 ký tự/giây (đo Alejandro Durán 19/9/2026: 15,3). Audio của đợt ngắn hơn chars/40 giây
@@ -3780,7 +3822,7 @@ def _tts_capcut(state: Dict, options: Dict) -> None:
         # KHÔNG ghi cứng speed/volume: bỏ trống thì CapCut TTS lấy mặc định người
         # dùng đã kéo trên giao diện extension. Ghi 10/10 như trước nghĩa là thanh
         # tốc độ ấy không bao giờ có tác dụng cho video do agent dựng.
-        body = {"email": email, "text": _shot_narration(shot), "timestamps": True}
+        body = {"email": email, "text": _spoken(shot), "timestamps": True}
         if speaker:
             body["speaker"] = str(speaker)
         try:
@@ -3843,7 +3885,7 @@ def _tts_capcut(state: Dict, options: Dict) -> None:
 
     speakable: List[Tuple[int, Dict, str]] = []
     for i, shot in enumerate(todo, 1):
-        text = _shot_narration(shot)
+        text = _spoken(shot)
         if len(text) < 3:
             skipped += 1
         else:
@@ -3966,7 +4008,7 @@ def _tts_capcut(state: Dict, options: Dict) -> None:
             state["_say"]("tts", "running",
                           ("this voice's word timings are unreliable" if marks["bad"] else
                            "this voice returns no word timings") + " — reading the remaining shots in batches")
-            per_shot = read_batches([(n, sh, _shot_narration(sh)) for n, sh in per_shot])
+            per_shot = read_batches([(n, sh, _spoken(sh)) for n, sh in per_shot])
     # Một shot không có giọng KHÔNG làm lượt chạy hỏng: khâu dựng gán cho nó 5
     # giây ảnh tĩnh và video lặng lẽ ngắn đi. CapCut hay rớt lẻ tẻ, nên thử lại
     # đúng những shot hỏng một lần nữa trước khi chấp nhận mất tiếng.
