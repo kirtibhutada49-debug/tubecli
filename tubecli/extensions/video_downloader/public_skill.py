@@ -106,3 +106,193 @@ async def resolve(text: str) -> Dict[str, Any]:
         "truncated": cut,
         "source": f"https://www.youtube.com/watch?v={res.get('id') or vid}",
     }
+# ── Skill «tải video YouTube» (user 27/9/2026: agent Douyin thêm tải YouTube) ────────
+# Giữ nguyên HAI CÁI NEO của phụ đề: ĐẦU VÀO chỉ là mã video 11 ký tự (lõi tự ghép URL);
+# ĐẦU RA là một đường dẫn /s/<token> TƯƠNG ĐỐI — cloud tự ghép với tên miền tunnel mà
+# CLOUD đã biết của máy này, nên máy bị chiếm cũng không trỏ người xem sang miền lạ.
+#
+# Vì sao không trả link googlevideo như Douyin trả douyinvod: link googlevideo khoá theo
+# IP máy phân tích — người xem ở mạng khác tải là 403. Nên máy tải hộ (KHÔNG cookie,
+# ≤720p, có trần thời lượng + dung lượng) rồi phát lại qua link chia sẻ của File
+# Manager. File + link sống DL_TTL_SEC rồi lượt gọi sau tự dọn.
+import json as _json
+import os
+import time as _time
+
+DL_MAX_SEC = 20 * 60                  # video dài quá 20 phút: từ chối TRƯỚC khi tải
+DL_MAX_BYTES = 300 * 1024 * 1024      # yt-dlp bỏ tải nếu file vượt trần
+DL_TTL_SEC = 6 * 3600
+DL_BUDGET_SEC = 36                    # tổng dò + tải, nằm trong trần 40 s của lõi
+
+
+def _town_dir() -> str:
+    from tubecli.extensions.video_downloader.routes import _get_download_dir
+
+    d = os.path.join(_get_download_dir(), "town")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _sweep(d: str) -> None:
+    """File của người lạ chỉ sống DL_TTL_SEC — quét mỗi lượt gọi, hỏng thì thôi."""
+    now = _time.time()
+    try:
+        for name in os.listdir(d):
+            fp = os.path.join(d, name)
+            try:
+                if os.path.isfile(fp) and now - os.path.getmtime(fp) > DL_TTL_SEC:
+                    os.remove(fp)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _existing_file(d: str, vid: str):
+    for ext in ("mp4", "webm", "mkv"):
+        fp = os.path.join(d, f"{vid}.{ext}")
+        if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+            return fp
+    return None
+
+
+def _meta_path(d: str, vid: str) -> str:
+    return os.path.join(d, f"{vid}.json")
+
+
+def _fm_enabled() -> bool:
+    try:
+        from tubecli.core.extension_manager import extension_manager
+
+        return any(e.name == "file_manager" for e in extension_manager.get_enabled())
+    except Exception:      # noqa: BLE001 — không hỏi được thì cứ thử, share hỏng sẽ tự lộ
+        return True
+
+
+def _share_path(path: str, name: str) -> str:
+    """"/s/<token>" cho file này — tái dùng link còn sống, hết hạn thì phát link mới.
+    Dùng đúng kho share của File Manager nên chủ máy thấy (và thu hồi được) trong tab
+    chia sẻ như mọi link khác."""
+    import secrets
+
+    from tubecli.extensions.file_manager import routes as fmr
+
+    items = fmr._load_shares()
+    key = os.path.normcase(os.path.normpath(path))
+    now = _time.time()
+    for it in items:
+        if os.path.normcase(os.path.normpath(str(it.get("path") or ""))) == key:
+            exp = it.get("expires")
+            if not exp or float(exp) > now + 60:
+                return "/s/" + it["token"]
+    items = [it for it in items if os.path.normcase(os.path.normpath(str(it.get("path") or ""))) != key]
+    it = {"token": secrets.token_urlsafe(18), "path": os.path.normpath(path), "name": (name or "")[:120],
+          "created": now, "expires": now + DL_TTL_SEC, "downloads": 0}
+    items.append(it)
+    fmr._save_shares(items)
+    return "/s/" + it["token"]
+
+
+def _download_blocking(url: str, vid: str, dest: str) -> str:
+    import yt_dlp
+
+    from tubecli.core import ytdlp_manager
+    from tubecli.extensions.video_downloader.routes import (
+        _ffmpeg_location_for_ytdlp, _get_ffmpeg_path, _ytdlp_can_merge,
+    )
+
+    ff = _get_ffmpeg_path()
+    loc = _ffmpeg_location_for_ytdlp(ff)
+    merge = _ytdlp_can_merge(ff)
+    # Ghép được thì lấy tới 720p; không thì đành dòng mp4 liền tiếng (thường 360p) —
+    # còn hơn là "requested merging but ffmpeg is not installed" (bài học routes.py).
+    fmt = ("bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[ext=mp4][height<=720]/b[ext=mp4]/b"
+           if merge else "b[ext=mp4][height<=720]/b[ext=mp4]/b")
+    opts = {"quiet": True, "noprogress": True, "no_warnings": True, "noplaylist": True, "retries": 2,
+            "socket_timeout": 15, "outtmpl": os.path.join(dest, f"{vid}.%(ext)s"),
+            "max_filesize": DL_MAX_BYTES, "format": fmt}
+    if merge:
+        opts["merge_output_format"] = "mp4"
+    if loc:
+        opts["ffmpeg_location"] = loc
+    opts.update(ytdlp_manager.js_runtime_opts())
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+    got = _existing_file(dest, vid)
+    if not got:
+        # ydl.download xong mà không có file = max_filesize đã bỏ tải giữa chừng.
+        raise PublicSkillError("video_too_big")
+    return got
+
+
+async def resolve_download(text: str) -> Dict[str, Any]:
+    vid = pick_link(text)
+    if not vid:
+        raise PublicSkillError("need_youtube_link")
+    if not _fm_enabled():
+        raise PublicSkillError("skill_unavailable", status=503)
+
+    started = _time.monotonic()
+    url = f"https://www.youtube.com/watch?v={vid}"
+    d = _town_dir()
+    _sweep(d)
+
+    got = _existing_file(d, vid)
+    meta = {}
+    if got:
+        try:
+            with open(_meta_path(d, vid), encoding="utf-8") as f:
+                meta = _json.load(f) or {}
+        except (OSError, ValueError):
+            meta = {}
+    else:
+        from tubecli.core.youtube_transcript import _ydl_extract
+
+        try:
+            info = await asyncio.wait_for(
+                asyncio.to_thread(partial(_ydl_extract, url, 15)), timeout=16)
+        except asyncio.TimeoutError:
+            raise PublicSkillError("timeout", status=504)
+        except ImportError:
+            raise PublicSkillError("skill_unavailable", status=503)
+        except Exception as e:      # noqa: BLE001
+            code = _code_for(str(e))
+            raise PublicSkillError(code, status=404 if code == "video_unavailable" else 422)
+
+        if str(info.get("availability") or "") not in _OPEN or info.get("is_live"):
+            raise PublicSkillError("video_unavailable", status=404)
+        dur = int(info.get("duration") or 0)
+        if not dur or dur > DL_MAX_SEC:
+            raise PublicSkillError("video_too_long")
+
+        left = DL_BUDGET_SEC - (_time.monotonic() - started)
+        if left < 5:
+            raise PublicSkillError("timeout", status=504)
+        try:
+            got = await asyncio.wait_for(
+                asyncio.to_thread(partial(_download_blocking, url, vid, d)), timeout=left)
+        except asyncio.TimeoutError:
+            raise PublicSkillError("timeout", status=504)
+
+        meta = {"title": str(info.get("title") or "")[:300],
+                "author": str(info.get("channel") or info.get("uploader") or "")[:80],
+                "dur": dur}
+        try:
+            with open(_meta_path(d, vid), "w", encoding="utf-8") as f:
+                _json.dump(meta, f, ensure_ascii=False)
+        except OSError:
+            pass
+
+    share = _share_path(got, (str(meta.get("title") or "youtube"))[:60] + ".mp4")
+    return {
+        "kind": "ytfile",
+        "title": str(meta.get("title") or ""),
+        "author": str(meta.get("author") or ""),
+        "duration": _hms(int(meta.get("dur") or 0)),
+        "size": int(os.path.getsize(got)),
+        "share": share + "/download",
+        "page": share,
+        "cover": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+        "source": f"https://www.youtube.com/watch?v={vid}",
+        "expires_h": int(DL_TTL_SEC // 3600),
+    }

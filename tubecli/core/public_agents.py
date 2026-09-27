@@ -106,12 +106,21 @@ async def _youtube_transcript(text: str) -> Dict[str, Any]:
     return await resolve(text)
 
 
+async def _youtube_download(text: str) -> Dict[str, Any]:
+    from tubecli.extensions.video_downloader.public_skill import resolve_download
+
+    return await resolve_download(text)
+
+
 PUBLIC_SKILLS: Dict[str, PublicSkill] = {
     s.id: s for s in (
         PublicSkill("douyin.resolve", "douyin_downloader", _douyin_resolve),
         # Chỉ NHẬN MÃ VIDEO, trả về CHỮ, không cookie của chủ — xem đầu file
         # extensions/video_downloader/public_skill.py. 300 ký tự là thừa cho một link.
         PublicSkill("youtube.transcript", "video_downloader", _youtube_transcript, max_input=300),
+        # Máy tải hộ (link googlevideo khoá theo IP) rồi phát qua đường dẫn /s/<token>
+        # TƯƠNG ĐỐI của chính máy — cloud tự ghép tên miền tunnel (resolve_download).
+        PublicSkill("youtube.download", "video_downloader", _youtube_download, max_input=300),
     )
 }
 
