@@ -124,6 +124,12 @@ async def _chess_move(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[
     return await resolve(text, opts)
 
 
+async def _xiangqi_move(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from tubecli.core.public_xiangqi import resolve
+
+    return await resolve(text, opts)
+
+
 PUBLIC_SKILLS: Dict[str, PublicSkill] = {
     s.id: s for s in (
         PublicSkill("douyin.resolve", "douyin_downloader", _douyin_resolve),
@@ -139,6 +145,9 @@ PUBLIC_SKILLS: Dict[str, PublicSkill] = {
         # MỘT nước cờ mỗi lượt gọi — cloud làm trọng tài, đầu vào là JSON {fen, turn,
         # history} cloud tự dựng; xem core/public_chess.py.
         PublicSkill("chess.move", "ai_arena", _chess_move, max_input=4000),
+        # Cờ tướng: engine luật nằm ngay trong Arena (engine/xiangqi_game.py); đầu vào
+        # còn kèm danh sách nước hợp lệ do trọng tài cloud dựng — hai tầng kiểm.
+        PublicSkill("xiangqi.move", "ai_arena", _xiangqi_move, max_input=6000),
     )
 }
 
