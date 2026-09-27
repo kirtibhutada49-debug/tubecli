@@ -139,9 +139,9 @@ def _sweep(d: str) -> None:
     _ps.sweep(d, DL_TTL_SEC)
 
 
-def _existing_file(d: str, vid: str):
+def _existing_file(d: str, stem: str):
     for ext in ("mp4", "webm", "mkv"):
-        fp = os.path.join(d, f"{vid}.{ext}")
+        fp = os.path.join(d, f"{stem}.{ext}")
         if os.path.isfile(fp) and os.path.getsize(fp) > 0:
             return fp
     return None
@@ -163,7 +163,7 @@ def _share_path(path: str, name: str) -> str:
     return _ps.share_path(path, name, DL_TTL_SEC)
 
 
-def _download_blocking(url: str, vid: str, dest: str) -> str:
+def _download_blocking(url: str, vid: str, dest: str, height: int = 720) -> str:
     import yt_dlp
 
     from tubecli.core import ytdlp_manager
@@ -176,10 +176,11 @@ def _download_blocking(url: str, vid: str, dest: str) -> str:
     merge = _ytdlp_can_merge(ff)
     # Ghép được thì lấy tới 720p; không thì đành dòng mp4 liền tiếng (thường 360p) —
     # còn hơn là "requested merging but ffmpeg is not installed" (bài học routes.py).
-    fmt = ("bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[ext=mp4][height<=720]/b[ext=mp4]/b"
-           if merge else "b[ext=mp4][height<=720]/b[ext=mp4]/b")
+    h = int(height) if int(height) in (720, 480, 360) else 720
+    fmt = (f"bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[ext=mp4][height<={h}]/b[ext=mp4]/b"
+           if merge else f"b[ext=mp4][height<={h}]/b[ext=mp4]/b")
     opts = {"quiet": True, "noprogress": True, "no_warnings": True, "noplaylist": True, "retries": 2,
-            "socket_timeout": 15, "outtmpl": os.path.join(dest, f"{vid}.%(ext)s"),
+            "socket_timeout": 15, "outtmpl": os.path.join(dest, f"{vid}_{h}.%(ext)s"),
             "max_filesize": DL_MAX_BYTES, "format": fmt}
     if merge:
         opts["merge_output_format"] = "mp4"
@@ -188,17 +189,25 @@ def _download_blocking(url: str, vid: str, dest: str) -> str:
     opts.update(ytdlp_manager.js_runtime_opts())
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
-    got = _existing_file(dest, vid)
+    got = _existing_file(dest, f"{vid}_{h}")
     if not got:
         # ydl.download xong mà không có file = max_filesize đã bỏ tải giữa chừng.
         raise PublicSkillError("video_too_big")
     return got
 
 
-async def resolve_download(text: str) -> Dict[str, Any]:
+async def resolve_download(text: str, opts=None) -> Dict[str, Any]:
     vid = pick_link(text)
     if not vid:
         raise PublicSkillError("need_youtube_link")
+    # Cấu hình riêng của skill (user 27/9): trần chất lượng — cloud đã lọc theo danh
+    # sách cứng, đây kẹp lần nữa cho chắc.
+    try:
+        height = int(str((opts or {}).get("quality") or 720))
+    except (TypeError, ValueError):
+        height = 720
+    if height not in (720, 480, 360):
+        height = 720
     if not _fm_enabled():
         raise PublicSkillError("skill_unavailable", status=503)
 
@@ -207,7 +216,7 @@ async def resolve_download(text: str) -> Dict[str, Any]:
     d = _town_dir()
     _sweep(d)
 
-    got = _existing_file(d, vid)
+    got = _existing_file(d, f"{vid}_{height}")
     meta = {}
     if got:
         try:
@@ -240,7 +249,7 @@ async def resolve_download(text: str) -> Dict[str, Any]:
             raise PublicSkillError("timeout", status=504)
         try:
             got = await asyncio.wait_for(
-                asyncio.to_thread(partial(_download_blocking, url, vid, d)), timeout=left)
+                asyncio.to_thread(partial(_download_blocking, url, vid, d, height)), timeout=left)
         except asyncio.TimeoutError:
             raise PublicSkillError("timeout", status=504)
 

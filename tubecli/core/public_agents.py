@@ -109,7 +109,7 @@ async def _youtube_transcript(text: str, opts: Optional[Dict[str, Any]] = None) 
 async def _youtube_download(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from tubecli.extensions.video_downloader.public_skill import resolve_download
 
-    return await resolve_download(text)
+    return await resolve_download(text, opts)
 
 
 async def _capcut_tts(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
