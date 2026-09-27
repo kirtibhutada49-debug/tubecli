@@ -134,18 +134,9 @@ def _town_dir() -> str:
 
 
 def _sweep(d: str) -> None:
-    """File của người lạ chỉ sống DL_TTL_SEC — quét mỗi lượt gọi, hỏng thì thôi."""
-    now = _time.time()
-    try:
-        for name in os.listdir(d):
-            fp = os.path.join(d, name)
-            try:
-                if os.path.isfile(fp) and now - os.path.getmtime(fp) > DL_TTL_SEC:
-                    os.remove(fp)
-            except OSError:
-                pass
-    except OSError:
-        pass
+    from tubecli.core import public_share as _ps
+
+    _ps.sweep(d, DL_TTL_SEC)
 
 
 def _existing_file(d: str, vid: str):
@@ -161,36 +152,15 @@ def _meta_path(d: str, vid: str) -> str:
 
 
 def _fm_enabled() -> bool:
-    try:
-        from tubecli.core.extension_manager import extension_manager
+    from tubecli.core import public_share as _ps
 
-        return any(e.name == "file_manager" for e in extension_manager.get_enabled())
-    except Exception:      # noqa: BLE001 — không hỏi được thì cứ thử, share hỏng sẽ tự lộ
-        return True
+    return _ps.fm_enabled()
 
 
 def _share_path(path: str, name: str) -> str:
-    """"/s/<token>" cho file này — tái dùng link còn sống, hết hạn thì phát link mới.
-    Dùng đúng kho share của File Manager nên chủ máy thấy (và thu hồi được) trong tab
-    chia sẻ như mọi link khác."""
-    import secrets
+    from tubecli.core import public_share as _ps
 
-    from tubecli.extensions.file_manager import routes as fmr
-
-    items = fmr._load_shares()
-    key = os.path.normcase(os.path.normpath(path))
-    now = _time.time()
-    for it in items:
-        if os.path.normcase(os.path.normpath(str(it.get("path") or ""))) == key:
-            exp = it.get("expires")
-            if not exp or float(exp) > now + 60:
-                return "/s/" + it["token"]
-    items = [it for it in items if os.path.normcase(os.path.normpath(str(it.get("path") or ""))) != key]
-    it = {"token": secrets.token_urlsafe(18), "path": os.path.normpath(path), "name": (name or "")[:120],
-          "created": now, "expires": now + DL_TTL_SEC, "downloads": 0}
-    items.append(it)
-    fmr._save_shares(items)
-    return "/s/" + it["token"]
+    return _ps.share_path(path, name, DL_TTL_SEC)
 
 
 def _download_blocking(url: str, vid: str, dest: str) -> str:

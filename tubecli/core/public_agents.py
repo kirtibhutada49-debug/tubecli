@@ -93,23 +93,29 @@ class PublicSkill:
     max_input: int = 1000
 
 
-async def _douyin_resolve(text: str) -> Dict[str, Any]:
+async def _douyin_resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     # import muộn: extension có thể bị tắt/thiếu thư viện, và lõi không được gãy theo nó
     from tubecli.extensions.douyin_downloader.public_skill import resolve
 
     return await resolve(text)
 
 
-async def _youtube_transcript(text: str) -> Dict[str, Any]:
+async def _youtube_transcript(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from tubecli.extensions.video_downloader.public_skill import resolve
 
     return await resolve(text)
 
 
-async def _youtube_download(text: str) -> Dict[str, Any]:
+async def _youtube_download(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from tubecli.extensions.video_downloader.public_skill import resolve_download
 
     return await resolve_download(text)
+
+
+async def _capcut_tts(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from tubecli.core.public_tts import resolve
+
+    return await resolve(text, opts)
 
 
 PUBLIC_SKILLS: Dict[str, PublicSkill] = {
@@ -121,6 +127,9 @@ PUBLIC_SKILLS: Dict[str, PublicSkill] = {
         # Máy tải hộ (link googlevideo khoá theo IP) rồi phát qua đường dẫn /s/<token>
         # TƯƠNG ĐỐI của chính máy — cloud tự ghép tên miền tunnel (resolve_download).
         PublicSkill("youtube.download", "video_downloader", _youtube_download, max_input=300),
+        # Văn bản → mp3 bằng giọng CapCut (bể tài khoản của chủ). `opts.voice` do cloud
+        # chọn từ danh sách cứng; xem core/public_tts.py.
+        PublicSkill("capcut.tts", "capcut_tts", _capcut_tts, max_input=700),
     )
 }
 
@@ -506,7 +515,8 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
     started = time.time()
     ok = False
     try:
-        result = await asyncio.wait_for(skill.handler(text), timeout=INVOKE_TIMEOUT_SEC)
+        opts = payload.get("opts") if isinstance(payload.get("opts"), dict) else {}
+        result = await asyncio.wait_for(skill.handler(text, opts), timeout=INVOKE_TIMEOUT_SEC)
         ok = True
         return result
     except asyncio.TimeoutError:
