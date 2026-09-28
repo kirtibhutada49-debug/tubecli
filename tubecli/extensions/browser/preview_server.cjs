@@ -30,7 +30,13 @@ const { Server: WebSocketServer } = require('ws');
 
 const args = minimist(process.argv.slice(2));
 const profileName = args.profile || 'default';
-const startUrl = args.url || 'about:blank';
+// --isolate: phiên do NGƯỜI LẠ điều khiển (skill browser.remote). Mạng qua net_guard.cjs,
+// lệnh điều hướng chỉ http/https, không tải file về máy, mở phiên sạch (không khôi phục
+// tab của người trước). Không cô lập được (nhân BAS) → thoát với lý do, KHÔNG mở trần.
+const isolateMode = !!args.isolate;
+const netGuardLib = isolateMode ? require('./net_guard.cjs') : null;
+const startUrl = (isolateMode && !netGuardLib.isAllowedNavigation(args.url || '')) ? 'about:blank'
+    : (args.url || 'about:blank');
 const port = parseInt(args.port) || 9222;
 const profilesDir = args['profiles-dir'] || '';
 
@@ -241,7 +247,8 @@ function emitFatalAndExit(reason, message, detail, code = 1) {
     // Trước khi thoát vì BẤT KỲ lý do gì mà CHƯA hiện được hình, ghi lý do ra file bền
     // để PHẦN B (/preview/last-error) đọc lại kể cả khi khung 'fatal' qua WS bị mất.
     if (!everReady) writeLastError(reason, message, detail);
-    try { broadcast({ type: 'fatal', reason, message, detail: String(detail || '').slice(0, 2000) }); } catch (e) {}
+    // người lạ (--isolate) không được thấy chi tiết lỗi: đường dẫn hồ sơ, tên người dùng máy
+    try { broadcast({ type: 'fatal', reason, message, detail: isolateMode ? '' : String(detail || '').slice(0, 2000) }); } catch (e) {}
     try { log(`FATAL[${reason}]: ${message}`); } catch (e) {}
     // Cho socket kịp đẩy khung 'fatal' ra dây trước khi tiến trình chết — ws.send
     // chỉ ghi vào buffer nội bộ; thoát ngay thì cloud lại chỉ thấy onclose câm.
@@ -557,9 +564,17 @@ process.on('uncaughtException', (err) => {
             }
             else if (msg.type === 'navigate') {
                 const { url } = msg;
+                if (isolateMode && !netGuardLib.isAllowedNavigation(url)) {
+                    broadcast({ type: 'nav_blocked', url: String(url || '').slice(0, 200) });
+                    return;
+                }
                 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
             } 
             else if (msg.type === 'new_tab') {
+                if (isolateMode && msg.url && !netGuardLib.isAllowedNavigation(msg.url)) {
+                    broadcast({ type: 'nav_blocked', url: String(msg.url || '').slice(0, 200) });
+                    return;
+                }
                 const np = await context.newPage();
                 attachPageListeners(np);
                 if (msg.url) { try { await np.goto(msg.url, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) {} }
@@ -1072,7 +1087,8 @@ process.on('uncaughtException', (err) => {
                 context = await browserManager.launch(profileName, {
                     headless: true,
                     fingerprint,
-                    args: launchArgs
+                    args: launchArgs,
+                    isolate: isolateMode,
                 });
                 success = true;
                 log(`Launch successful on attempt ${attempt}`);
@@ -1182,6 +1198,13 @@ process.on('uncaughtException', (err) => {
         // khung nhin la doi toan bo toa do phan tu ngay giua luc no dang bam.
         if (!attachMode) p.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
         p.on('filechooser', async (fc) => { activeFileChooser = fc; broadcast({ type: 'file_chooser_open', multiple: fc.isMultiple() }); });
+        if (isolateMode) {
+            // Người lạ không được ghi file xuống đĩa máy chủ (đầy đĩa, mã độc chờ ai mở).
+            p.on('download', async (d) => {
+                try { await d.cancel(); } catch (e) {}
+                broadcast({ type: 'download_blocked', name: String(d.suggestedFilename() || '').slice(0, 120) });
+            });
+        }
         p.on('crash', () => {
             // Renderer của tab chết. Nếu CHƯA hiện được hình (thường tab chính đang tải)
             // → đây là lỗi mở, báo lý do. Nếu ĐÃ hiện hình rồi thì chỉ MỘT tab hỏng,
@@ -1225,6 +1248,14 @@ process.on('uncaughtException', (err) => {
         if (!page) { emitFatalAndExit('attach_failed',
             `Phien cua ho so «${profileName}» khong con tab nao de xem.`, 'no pages over CDP'); return; }
         log(`Xem ghep tab: ${page.url()}`);
+    } else if (isolateMode) {
+        // Phiên sạch: đóng các tab trình duyệt tự khôi phục (của người xem TRƯỚC) — người
+        // sau không được thấy người trước đang xem gì. Giữ đúng một tab.
+        const all = context.pages();
+        page = all[0] || await context.newPage();
+        for (const p of all.slice(1)) { try { await p.close(); } catch (e) {} }
+        try { await page.goto('about:blank'); } catch (e) {}
+        log(`Phiên cô lập: đóng ${Math.max(0, all.length - 1)} tab khôi phục`);
     } else {
         const all = context.pages();
         const real = all.filter((p) => p.url() !== 'about:blank');

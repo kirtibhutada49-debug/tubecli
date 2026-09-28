@@ -130,6 +130,12 @@ async def _xiangqi_move(text: str, opts: Optional[Dict[str, Any]] = None) -> Dic
     return await resolve(text, opts)
 
 
+async def _browser_remote(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from tubecli.core.public_browser import resolve
+
+    return await resolve(text, opts)
+
+
 async def _douyin_reup(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from tubecli.core.public_reup import resolve
 
@@ -157,6 +163,9 @@ PUBLIC_SKILLS: Dict[str, PublicSkill] = {
         # Reup Douyin: job hai pha (link → thẻ tiến độ; {"job"} → trạng thái/kết quả) —
         # xem core/public_reup.py. Chuỗi tải→phụ đề→lồng tiếng chạy nền trên máy.
         PublicSkill("douyin.reup", "douyin_downloader", _douyin_reup, max_input=600),
+        # Trình duyệt từ xa: người lạ dùng MỘT hồ sơ chủ chọn, trong preview cô lập mạng —
+        # xem core/public_browser.py. Input là JSON {"action"} do cloud dựng.
+        PublicSkill("browser.remote", "browser", _browser_remote, max_input=200),
     )
 }
 
@@ -251,7 +260,44 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
         except (TypeError, ValueError):
             v = dflt
         out[k] = max(lo, min(hi, v))
+    out.update(_browser_settings(raw, old or {}))
+    if enabled and "browser.remote" in skills and not out["browser_profile"]:
+        raise ValueError("no_browser_profile")
     return out
+
+
+BROWSER_MINUTES = (15, 5, 60)          # mặc định, tối thiểu, tối đa — một phiên của người lạ
+BROWSER_UPLOADS = ("media", "off")     # media = ảnh/video/PDF từ MÁY NGƯỜI XEM; off = cấm
+
+
+def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
+    """Cài đặt skill browser.remote. Trường không gửi → giữ bản đang lưu (client cũ không
+    biết tới chúng thì không được xoá mất hồ sơ chủ đã chọn). Hồ sơ phải CÓ THẬT trên máy —
+    tên hồ sơ không bao giờ rời máy (Town chỉ biết agent có trình duyệt để dùng)."""
+    if "browser_profile" in raw:
+        bp = _clean_text(raw.get("browser_profile"), 64)
+        if bp and bp not in _profile_names():
+            raise ValueError("bad_browser_profile")
+    else:
+        bp = str(old.get("browser_profile") or "")
+    dflt, lo, hi = BROWSER_MINUTES
+    try:
+        mins = int(raw.get("browser_minutes") if raw.get("browser_minutes") not in (None, "")
+                   else old.get("browser_minutes") or dflt)
+    except (TypeError, ValueError):
+        mins = dflt
+    up = str(raw.get("browser_upload") or old.get("browser_upload") or BROWSER_UPLOADS[0]).strip().lower()
+    return {"browser_profile": bp, "browser_minutes": max(lo, min(hi, mins)),
+            "browser_upload": up if up in BROWSER_UPLOADS else BROWSER_UPLOADS[0]}
+
+
+def _profile_names() -> set:
+    try:
+        from tubecli.extensions.browser.profile_manager import list_profiles
+
+        return {str(p.get("name")) for p in list_profiles() if isinstance(p, dict) and p.get("name")}
+    except Exception:      # noqa: BLE001 — không đọc được danh sách thì không nhận hồ sơ nào
+        return set()
 
 
 def threshold(st: Dict[str, Any], key: str) -> int:
@@ -592,7 +638,12 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
         opts = payload.get("opts") if isinstance(payload.get("opts"), dict) else {}
         # Skill cần biết agent nào đang trả lời (cờ vua: play-turn lấy model theo agent
         # Flow). Tiêm Ở ĐÂY, sau xác thực — cloud không gửi và không giả được trường này.
-        opts = {**opts, "_agent_id": agent_id}
+        # Mọi khoá "_" của cloud bị bỏ trước: chỉ lõi được đặt chúng.
+        opts = {k: v for k, v in opts.items() if not str(k).startswith("_")}
+        opts = {**opts, "_agent_id": agent_id, "_caller": caller}
+        if skill_id == "browser.remote":
+            # phiên gắn với MỘT người xem + hồ sơ/phút/tải lên chủ đã chọn
+            opts["_settings"] = {k: st.get(k) for k in ("browser_profile", "browser_minutes", "browser_upload")}
         result = await asyncio.wait_for(skill.handler(text, opts), timeout=INVOKE_TIMEOUT_SEC)
         ok = True
         return result

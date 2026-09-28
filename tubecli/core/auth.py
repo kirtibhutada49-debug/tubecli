@@ -488,6 +488,17 @@ def mint_guest_token(scope: dict, ttl_seconds: int = GUEST_TTL_SECONDS) -> dict:
     return {"guest_token": token, "exp": exp}
 
 
+def guest_token_exp(token: Optional[str]) -> int:
+    """Mốc hết hạn (epoch) của một guest token; 0 nếu không có."""
+    if not token or not isinstance(token, str):
+        return 0
+    ent = _guest_cache.get(token) or _load_guest_tokens().get(token)
+    try:
+        return int((ent or {}).get("exp") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def guest_scope_for(token: Optional[str]) -> Optional[dict]:
     """Scope nếu guest token hợp lệ + chưa hết hạn; None nếu không (FAIL-CLOSED)."""
     if not token or not isinstance(token, str) or not token.startswith(GUEST_TOKEN_PREFIX):

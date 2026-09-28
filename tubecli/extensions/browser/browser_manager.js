@@ -1526,7 +1526,10 @@ export class BrowserManager {
             headless = false,
             proxy = null,
             fingerprint = null,
-            args = []
+            args = [],
+            // isolate: trình duyệt do NGƯỜI LẠ điều khiển (skill browser.remote) — mọi mạng
+            // đi qua net_guard.cjs (chặn 127.x/LAN/metadata). Chỉ nhánh ShardX làm được.
+            isolate = false
         } = options;
 
         const configPath = path.join(profilePath, 'config.json');
@@ -1750,7 +1753,7 @@ export class BrowserManager {
 
         if (isShardXProfile && shardxExePath) {
             return await this._launchShardX({
-                profileName, profilePath, shardxExePath, proxy, fingerprint, headless, args, targetChromiumVer
+                profileName, profilePath, shardxExePath, proxy, fingerprint, headless, args, targetChromiumVer, isolate
             });
         }
 
@@ -1762,6 +1765,14 @@ export class BrowserManager {
         // call below would be a TypeError on null, which says nothing about the
         // actual problem: this profile is pinned to a Windows-only engine.
         requirePlugin();
+        if (isolate) {
+            // BAS tự lo proxy trong plugin, không ép được mọi kết nối qua net_guard — mở
+            // trần cho người lạ điều khiển là giao máy chủ cho họ. Từ chối có lý do.
+            const e = new Error('ISOLATE_UNSUPPORTED: hồ sơ này chạy nhân BAS, chưa cô lập mạng được để chia sẻ '
+                + 'công khai. Dùng một hồ sơ nhân ShardX.');
+            e.code = 'ISOLATE_UNSUPPORTED';
+            throw e;
+        }
 
         // Apply fingerprint with retry logic (BAS only)
         if (fingerprint) {
@@ -1904,7 +1915,7 @@ export class BrowserManager {
                              try {
                                  return await this._launchShardX({
                                      profileName, profilePath, shardxExePath: alt.exe, proxy, fingerprint,
-                                     headless, args, targetChromiumVer: alt.version
+                                     headless, args, targetChromiumVer: alt.version, isolate
                                  });
                              } catch (shardxErr) {
                                  // Kể cả HAI lý do: nói mỗi lý do sau thì người đọc log
@@ -1961,7 +1972,7 @@ export class BrowserManager {
      * Uses bundled fingerprint profiles from %APPDATA%\shardx-launcher\runtime\fingerprints\
      * or falls back to fingerprint saved in the profile folder.
      */
-    async _launchShardX({ profileName, profilePath, shardxExePath, proxy, fingerprint, headless, args, targetChromiumVer }) {
+    async _launchShardX({ profileName, profilePath, shardxExePath, proxy, fingerprint, headless, args, targetChromiumVer, isolate = false }) {
         console.log(`[ShardX] Launching with native engine at: ${shardxExePath}`);
 
         const configPath = path.join(profilePath, 'config.json');
@@ -2345,6 +2356,32 @@ export class BrowserManager {
                 + (px.hasCredentials ? ' (with credentials)' : ''));
         }
 
+        // Cô lập mạng cho phiên người lạ điều khiển: Chromium CHỈ nói chuyện với net_guard
+        // (proxy của hồ sơ, nếu có, thành chặng sau của nó). Playwright tự thêm <-loopback>
+        // vào bypass list khi có proxy ⇒ cả 127.0.0.1 cũng phải qua guard — không được để
+        // biến môi trường tắt hành vi đó. WebRTC chỉ qua proxy (UDP đi vòng được proxy
+        // HTTP), tắt QUIC cho chắc.
+        let netGuard = null;
+        if (isolate) {
+            delete process.env.PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK;
+            const ngMod = await import('./net_guard.cjs');
+            const startNetGuard = ngMod.startNetGuard || (ngMod.default && ngMod.default.startNetGuard);
+            let upstream = null;
+            if (proxyOption) {
+                const pu = new URL(proxyOption.server);
+                upstream = { scheme: pu.protocol.replace(':', ''), host: pu.hostname,
+                             port: Number(pu.port) || (pu.protocol === 'https:' ? 443 : 1080),
+                             username: proxyOption.username || '', password: proxyOption.password || '' };
+                if (upstream.scheme === 'socks4') {
+                    throw new Error('ISOLATE_UNSUPPORTED: proxy SOCKS4 của hồ sơ không nối chuỗi được qua bộ lọc mạng.');
+                }
+            }
+            netGuard = await startNetGuard({ upstream, log: (m) => console.log(m) });
+            proxyOption = { server: `http://127.0.0.1:${netGuard.port}` };
+            launchArgs.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--disable-quic');
+            console.log(`[ShardX] Cô lập mạng: mọi kết nối qua net_guard 127.0.0.1:${netGuard.port}`);
+        }
+
         // ── 3. Launch via patchright (stealth Playwright) ───────────────
         // patchright is already in node_modules (playwright-with-fingerprints depends on it)
         // We use chromium.launchPersistentContext with the ShardX executable
@@ -2374,6 +2411,10 @@ export class BrowserManager {
                 } catch (e) {}
             });
 
+            if (netGuard) {
+                context.on('close', () => { netGuard.close().catch(() => {}); });
+                context.__netGuard = netGuard;
+            }
             console.log('[ShardX] ✅ Browser launched successfully.');
             return context;
         } catch (e) {

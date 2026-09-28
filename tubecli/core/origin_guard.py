@@ -107,7 +107,12 @@ def _same_site(a: str, b: str) -> bool:
     return pa[-2:] == pb[-2:]
 
 
-def remember_host(origin: str, host_header: str) -> None:
+# Tên miền CHÍNH THỨC của cloud — trang Flow/Town mở từ đây. Lượt đăng nhập KHÁCH chỉ
+# được dạy máy tin Origin thuộc danh sách này (xem trust_origin ở remember_host).
+CLOUD_ORIGIN_HOSTS = {"cloud.tubecreate.com", "market.tubecreate.com", "tubecli.app"}
+
+
+def remember_host(origin: str, host_header: str, trust_origin: bool = True) -> None:
     """Trust this address from now on, because someone just authenticated on it.
 
     The NAT problem this solves: a cloud VM's own interface holds a private
@@ -137,7 +142,11 @@ def remember_host(origin: str, host_header: str) -> None:
         return
     if o == h or _same_site(o, h):
         _learned_hosts.add(h)
-        if o not in _LOOPBACK_HOSTS:
+        # trust_origin=False (đăng nhập bằng token KHÁCH, không phải mật khẩu): chỉ học
+        # Origin nếu là cloud chính thức. Token khách công khai ai cũng xin được — học Origin
+        # bất kỳ cùng site thì người lạ giả Origin = tunnel TubeCLI của chính họ
+        # (*.tubecreate.com) là máy này tin trang của họ (CSRF/WS vào dashboard của chủ).
+        if o not in _LOOPBACK_HOSTS and (trust_origin or o in CLOUD_ORIGIN_HOSTS):
             _learned_hosts.add(o)  # trang vừa chứng minh mật khẩu — fetch tiếp theo từ nó cũng hợp lệ
         # Cùng bằng chứng ấy: đây là địa chỉ công khai người dùng đang dùng để tới máy
         # này — ghi lại để link chia sẻ trong kết quả (Telegram) mở được từ ngoài.

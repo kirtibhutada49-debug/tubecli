@@ -46,6 +46,11 @@ class PublicAgentSettings(BaseModel):
     max_parallel: Optional[int] = None
     cpu_tired: Optional[int] = None
     ram_tired: Optional[int] = None
+    # browser.remote: hồ sơ trình duyệt cho người lạ dùng, phút/phiên, chính sách tải file.
+    # None = không gửi = giữ bản đang lưu.
+    browser_profile: Optional[str] = None
+    browser_minutes: Optional[int] = None
+    browser_upload: Optional[str] = None
 
 
 @router.get("/api/v1/public-agents")

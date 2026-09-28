@@ -16,6 +16,29 @@ where everything private tends to listen.
 from __future__ import annotations
 
 
+def origin_ok(websocket) -> bool:
+    """Cùng luật Origin với HTTP (_guard_cross_origin). Trước 28/9/2026 WebSocket KHÔNG qua
+    luật này: trang evil.com mở trong BẤT KỲ trình duyệt nào trên máy (browser của agent lướt
+    web, browser chia sẻ) tự mở được ws://127.0.0.1:5295/api/v1/terminal/ws, và loopback
+    không qua proxy = chủ máy ⇒ shell. Trình duyệt luôn gửi Origin khi bắt tay WS nên không
+    né được; client không phải trình duyệt (không Origin) vẫn qua như HTTP.
+
+    Qua tunnel (có header proxy) thì nhận thêm Origin CÙNG SITE với Host — trang Flow trên
+    cloud.tubecreate.com mở WS tới <máy>.tubecreate.com — vì đường đó vẫn phải có cookie
+    đăng nhập, còn loopback trần thì không; DNS rebinding (Origin=Host=evil) đi loopback trần
+    nên không lọt qua nhánh này."""
+    origin = websocket.headers.get("origin") or ""
+    if not origin:
+        return True
+    from tubecli.core import auth, origin_guard as og
+
+    if og.is_origin_allowed(origin):
+        return True
+    if auth.behind_proxy(websocket.headers):
+        return og._same_site(og._host_of(origin), og._host_of(websocket.headers.get("host") or ""))
+    return False
+
+
 async def reject_unless_allowed(websocket) -> bool:
     """Close the socket and return False when the caller may not connect.
 
@@ -27,6 +50,9 @@ async def reject_unless_allowed(websocket) -> bool:
     try:
         from tubecli.core import auth
 
+        if not origin_ok(websocket):
+            await websocket.close(code=1008, reason="cross_origin")
+            return False
         client_host = websocket.client.host if websocket.client else ""
         cookie = websocket.cookies.get(auth.SESSION_COOKIE)
         refusal = auth.check_request(client_host, cookie, websocket.headers)

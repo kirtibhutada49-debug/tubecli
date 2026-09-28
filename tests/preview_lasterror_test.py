@@ -107,6 +107,9 @@ function makeSandbox(initialEver, dir, attach) {
         // onBrowserDeath rẽ nhánh theo nó, nên sandbox PHẢI cấp — thiếu là
         // ReferenceError, và đó chính là cách test này từng đỏ.
         const attachMode = !!opts.attach;
+        // preview_server.cjs:36 const isolateMode — emitFatalAndExit đọc nó (người lạ không
+        // được thấy detail); thiếu là ReferenceError bị try nuốt ⇒ không có khung fatal.
+        const isolateMode = false;
         let everReady = opts.ever;
         let __fatalEmitted = false;
         let storageDirRef = opts.dir;

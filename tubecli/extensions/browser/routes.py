@@ -1018,6 +1018,71 @@ async def api_launch_browser(req: LaunchRequest):
         async with _launching_lock:
             _launching_profiles.pop(req.profile, None)
 
+def port_is_isolated(port: int) -> bool:
+    """Cổng này là preview CÔ LẬP MẠNG (mở bằng --isolate cho người lạ) còn sống?"""
+    for info in list(_preview_processes.values()):
+        if info.get("port") == int(port) and info.get("isolated"):
+            proc = info.get("proc")
+            return proc is None or proc.poll() is None
+    return False
+
+
+async def launch_public_preview(profile: str) -> dict:
+    """Mở preview CÔ LẬP MẠNG cho phiên người lạ (skill browser.remote, core/public_browser).
+
+    Khác /preview/launch: KHÔNG giành hồ sơ đang bận (agent đang chạy, chủ đang mở trên
+    canvas) — người lạ không được đá việc của chủ; luôn --isolate (net_guard, không tải về,
+    phiên sạch); nhân BAS thì preview_server từ chối (ISOLATE_UNSUPPORTED) → báo lỗi.
+    Trả {ok, port, session_id} hoặc {ok: False, reason, message}."""
+    from .profile_manager import PROFILES_DIR as _PD
+    if not profile or not os.path.isdir(os.path.join(_PD, str(profile))):
+        return {"ok": False, "reason": "no_profile", "message": "profile not found"}
+    async with _launching_lock:
+        if _is_launching(profile) or is_profile_running(profile):
+            return {"ok": False, "reason": "in_use", "message": "profile is busy"}
+        from .process_manager import browser_process_manager as _bpm
+        try:
+            with _bpm._instances_lock:
+                _snap = list(_bpm._instances.values())
+        except Exception:
+            _snap = []
+        _pf = preview_preflight(profile, _preview_processes, _snap,
+                                in_flight_others=sum(1 for x in _launching_profiles if x != profile))
+        if _pf is not None:
+            return {"ok": False, "reason": str(_pf.get("reason") or "preflight"),
+                    "message": str(_pf.get("message_vi") or "")[:300]}
+        _launching_profiles[profile] = time.time()
+    try:
+        proc, port, early_output = await _spawn_preview_server(profile, "", extra_args=("--isolate",))
+        session_id = f"public_{int(time.time() * 1000)}"
+        _preview_processes[session_id] = {
+            "proc": proc, "port": port, "profile": profile, "started_at": time.time(),
+            "opened_by": "public", "early_output": early_output, "isolated": True,
+        }
+        return {"ok": True, "port": port, "session_id": session_id}
+    except HTTPException as e:
+        return {"ok": False, "reason": "launch_failed", "message": str(e.detail)[:300]}
+    finally:
+        async with _launching_lock:
+            _launching_profiles.pop(profile, None)
+
+
+def stop_public_preview(profile: str, port: int) -> None:
+    """Tắt preview cô lập của phiên người lạ + dọn file họ đã tải lên (temp_uploads/pub<port>_*)."""
+    import shutil
+    for sid, info in list(_preview_processes.items()):
+        if info.get("profile") == profile and info.get("isolated"):
+            stop_preview_for_profile(profile)
+            break
+    try:
+        base = _upload_temp_dir()
+        for name in os.listdir(base):
+            if name.startswith(public_upload_prefix(port)):
+                shutil.rmtree(os.path.join(base, name), ignore_errors=True)
+    except Exception:
+        pass
+
+
 def stop_preview_for_profile(profile: str) -> bool:
     """Dừng (các) phiên PREVIEW đang giữ một hồ sơ — tách khỏi route /stop để
     vòng lịch gọi được khi người dùng bấm Run tay: ý định tường minh thì nhường
@@ -3397,6 +3462,46 @@ async def api_free_memory(req: FreeMemoryRequest, request: Request):
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+# Lệnh WS người LẠ được gửi xuống preview (browser.remote). Danh sách CHO PHÉP: chuột,
+# phím, cuộn, tab, điều hướng http/https — không soi phần tử, không chọn phần tử.
+_PUBLIC_WS_TYPES = {"set_visible", "mouse", "scroll", "keyboard", "get_selection", "navigate",
+                    "new_tab", "switch_tab", "close_tab", "get_tabs", "nav", "file_cancel", "ping"}
+
+
+def _public_url_ok(url) -> bool:
+    import ipaddress
+    from urllib.parse import urlsplit
+    s = str(url or "").strip()
+    if not s or s == "about:blank":
+        return True
+    try:
+        u = urlsplit(s)
+    except ValueError:
+        return False
+    if u.scheme not in ("http", "https") or u.username or u.password or not u.hostname:
+        return False
+    h = u.hostname.strip("[]").rstrip(".").lower()
+    try:
+        ip = ipaddress.ip_address(h)
+        return ip.is_global and not ip.is_multicast
+    except ValueError:
+        pass
+    return "." in h and not re.search(r"(^|\.)(localhost|local|internal|intranet|lan|home\.arpa|localdomain)$", h)
+
+
+def _public_ws_message_ok(text: str) -> bool:
+    try:
+        msg = json.loads(text) or {}
+    except Exception:
+        return False
+    t = msg.get("type")
+    if t not in _PUBLIC_WS_TYPES:
+        return False
+    if t in ("navigate", "new_tab"):
+        return _public_url_ok(msg.get("url"))
+    return True
+
+
 @router.websocket("/preview/ws/{port}")
 async def ws_preview_proxy(websocket: WebSocket, port: int):
     """Proxy WebSocket connection to the local preview server.
@@ -3414,12 +3519,20 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
     # này nên guest luôn bị từ chối ở đó — đúng ý G1 chỉ browser.)
     guest_ok = False
     guest_view_only = False
+    guest_public = False
+    guest_cookie = ""
     try:
         from tubecli.core import auth
-        _gscope = auth.guest_scope_for(websocket.cookies.get(auth.GUEST_COOKIE))
+        guest_cookie = websocket.cookies.get(auth.GUEST_COOKIE) or ""
+        _gscope = auth.guest_scope_for(guest_cookie)
         if _gscope:
             _prof = _resolve_profile_for_port(port)
             guest_ok = bool(_prof) and _prof in set(str(x) for x in (_gscope.get("profiles") or []))
+            # Người LẠ (browser.remote): chỉ preview CÔ LẬP MẠNG — preview trần của chủ
+            # (mở trên canvas) nói chuyện được với 127.0.0.1 = dashboard của chủ.
+            guest_public = bool(_gscope.get("public"))
+            if guest_public:
+                guest_ok = guest_ok and port_is_isolated(port)
             # Share Chỉ-xem: vẫn stream màn hình, nhưng MỌI input (chuột/phím/
             # điều hướng/tab) bị chặn ngay tại proxy — whitelist vài loại
             # telemetry vô hại, loại lạ rơi mặc định (fail-closed).
@@ -3428,6 +3541,11 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
         guest_ok = False
         guest_view_only = False
 
+    if guest_ok:
+        from tubecli.core.ws_auth import origin_ok
+        if not origin_ok(websocket):
+            await websocket.close(code=1008, reason="cross_origin")
+            return
     if not guest_ok and not await reject_unless_allowed(websocket):
         return
     await websocket.accept()
@@ -3471,6 +3589,8 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
                     if event.get("type") == "websocket.disconnect":
                         break
                     if event.get("text") is not None:
+                        if guest_public and not _public_ws_message_ok(event["text"]):
+                            continue
                         if guest_view_only:
                             try:
                                 _mt = (json.loads(event["text"]) or {}).get("type")
@@ -3480,8 +3600,8 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
                                 continue
                         await local_ws.send_str(event["text"])
                     elif event.get("bytes") is not None:
-                        if guest_view_only:
-                            continue   # bytes từ client = upload — Chỉ-xem không gửi gì
+                        if guest_view_only or guest_public:
+                            continue   # bytes từ client = upload — Chỉ-xem/khách công khai đi HTTP có trần
                         await local_ws.send_bytes(event["bytes"])
             except (WebSocketDisconnect, Exception):
                 pass
@@ -3517,10 +3637,26 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
             except asyncio.CancelledError:
                 pass
         
+        async def guest_expiry():
+            """Khách: token hết hạn / bị thu → CẮT socket đang mở. Trước 28/9 WS chỉ được
+            kiểm lúc bắt tay nên người đã bị thu quyền vẫn điều khiển tiếp tới khi tự đóng."""
+            if not guest_ok:
+                await asyncio.Event().wait()
+            from tubecli.core import auth as _auth
+            while True:
+                await asyncio.sleep(5)
+                if not _auth.guest_scope_for(guest_cookie):
+                    try:
+                        await websocket.close(code=4001, reason="guest_expired")
+                    except Exception:
+                        pass
+                    return
+
         done, pending = await asyncio.wait(
             [asyncio.create_task(forward_to_local()),
              asyncio.create_task(forward_to_client()),
-             asyncio.create_task(heartbeat())],
+             asyncio.create_task(heartbeat()),
+             asyncio.create_task(guest_expiry())],
             return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
@@ -3685,30 +3821,67 @@ async def proxy_preview_control(port: int, action: str, request: Request):
         raise HTTPException(502, f"Preview server did not accept '{action}': {e}")
 
 
+# ── Khách CÔNG KHAI (skill browser.remote) tải file lên ────────────────────────
+# Chỉ từ máy CỦA HỌ (bytes gửi lên) — đường chọn file trên máy chủ (upload-local,
+# set-input, attach-file, drive-attach) đã bị gate chặn hẳn. Thêm trần: ≤5 file, mỗi file
+# ≤25 MB, chỉ ảnh/video/PDF; file nằm trong temp_uploads/pub<port>_* để dọn khi hết phiên.
+PUBLIC_UPLOAD_MAX_FILES = 5
+PUBLIC_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+PUBLIC_UPLOAD_EXTS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif", ".avif",
+    ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".pdf",
+}
+
+
+def _public_scope(request) -> Optional[dict]:
+    sc = getattr(getattr(request, "state", None), "guest_scope", None)
+    return sc if isinstance(sc, dict) and sc.get("public") else None
+
+
+def _public_name_ok(name: str) -> bool:
+    n = os.path.basename(str(name or ""))
+    return bool(n) and os.path.splitext(n)[1].lower() in PUBLIC_UPLOAD_EXTS
+
+
+def public_upload_prefix(port: int) -> str:
+    return f"pub{int(port)}_"
+
+
 @router.post("/preview/upload/{port}")
-async def api_preview_upload_files(port: int, files: List[UploadFile] = File(...)):
+async def api_preview_upload_files(request: Request, port: int, files: List[UploadFile] = File(...)):
     """Upload files for the file chooser dialog of browser at port."""
     import uuid
     import shutil
     import requests
-    
+
     ext_dir = os.path.dirname(os.path.abspath(__file__))
     temp_dir = os.path.join(ext_dir, "data", "temp_uploads")
     os.makedirs(temp_dir, exist_ok=True)
-    
+
+    public = _public_scope(request) is not None
+    if public:
+        if len(files) > PUBLIC_UPLOAD_MAX_FILES:
+            raise HTTPException(400, f"Tối đa {PUBLIC_UPLOAD_MAX_FILES} file mỗi lần.")
+        if any(not _public_name_ok(f.filename) for f in files):
+            raise HTTPException(415, "Chỉ nhận ảnh, video hoặc PDF.")
+
     # Create unique directory for this upload batch
-    upload_id = str(uuid.uuid4())
+    upload_id = (public_upload_prefix(port) if public else "") + str(uuid.uuid4())
     batch_dir = os.path.join(temp_dir, upload_id)
     os.makedirs(batch_dir, exist_ok=True)
-    
+
     file_paths = []
     try:
         for file in files:
             safe_filename = os.path.basename(file.filename)
             dest_path = os.path.join(batch_dir, safe_filename)
-            
+
+            written = 0
             with open(dest_path, "wb") as buffer:
                 while chunk := await file.read(1024 * 1024):
+                    written += len(chunk)
+                    if public and written > PUBLIC_UPLOAD_MAX_BYTES:
+                        raise HTTPException(413, "Mỗi file tối đa 25 MB.")
                     buffer.write(chunk)
             file_paths.append(dest_path)
             
@@ -3753,6 +3926,7 @@ def _safe_upload_id(s: str) -> str:
 
 @router.post("/preview/upload-chunk/{port}")
 async def api_preview_upload_chunk(
+    request: Request,
     port: int,
     upload_id: str = Form(...),
     file_name: str = Form(...),
@@ -3763,14 +3937,35 @@ async def api_preview_upload_chunk(
     uid = _safe_upload_id(upload_id)
     if not uid:
         raise HTTPException(400, "upload_id không hợp lệ")
+    public = _public_scope(request) is not None
+    if public:
+        if not _public_name_ok(file_name):
+            raise HTTPException(415, "Chỉ nhận ảnh, video hoặc PDF.")
+        if int(chunk_index) < 0 or int(chunk_index) > 50:
+            raise HTTPException(400, "chunk_index không hợp lệ")
+        uid = public_upload_prefix(port) + uid     # khách không chọn được thư mục ngoài vùng của mình
     batch_dir = os.path.join(_upload_temp_dir(), uid)
     os.makedirs(batch_dir, exist_ok=True)
     safe_name = os.path.basename(file_name)
     part_path = os.path.join(batch_dir, f"{safe_name}.part{int(chunk_index):06d}")
+    already = 0
+    if public:
+        already = sum(os.path.getsize(os.path.join(batch_dir, x)) for x in os.listdir(batch_dir)
+                      if x.startswith(safe_name + ".part") and x != os.path.basename(part_path))
     try:
+        written = 0
         with open(part_path, "wb") as buffer:
             while data := await chunk.read(1024 * 1024):
+                written += len(data)
+                if public and already + written > PUBLIC_UPLOAD_MAX_BYTES:
+                    raise HTTPException(413, "Mỗi file tối đa 25 MB.")
                 buffer.write(data)
+    except HTTPException:
+        try:
+            os.remove(part_path)
+        except Exception:
+            pass
+        raise
     except Exception as e:
         raise HTTPException(500, f"Lưu chunk lỗi: {e}")
     return {"ok": True, "chunk": int(chunk_index)}
@@ -3782,12 +3977,18 @@ class UploadFinalizeRequest(BaseModel):
 
 
 @router.post("/preview/upload-finalize/{port}")
-async def api_preview_upload_finalize(port: int, req: UploadFinalizeRequest):
+async def api_preview_upload_finalize(request: Request, port: int, req: UploadFinalizeRequest):
     """Ghép các chunk thành file hoàn chỉnh rồi gắn vào filechooser đang chờ."""
     import shutil
     import requests
 
     uid = _safe_upload_id(req.upload_id)
+    if _public_scope(request) is not None:
+        if len(req.files) > PUBLIC_UPLOAD_MAX_FILES:
+            raise HTTPException(400, f"Tối đa {PUBLIC_UPLOAD_MAX_FILES} file mỗi lần.")
+        if any(not _public_name_ok(f.get("name", "")) for f in req.files):
+            raise HTTPException(415, "Chỉ nhận ảnh, video hoặc PDF.")
+        uid = public_upload_prefix(port) + uid
     batch_dir = os.path.join(_upload_temp_dir(), uid)
     if not uid or not os.path.isdir(batch_dir):
         raise HTTPException(400, "Phiên upload không tồn tại")

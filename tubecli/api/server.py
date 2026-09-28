@@ -199,6 +199,29 @@ async def _guest_allowed(request: Request, scope: dict) -> bool:
     # access != "view"; nhánh GHI đòi "full".
     access = str(scope.get("access") or "control")
 
+    # KHÁCH CÔNG KHAI (skill browser.remote — người LẠ trên Town): nhánh riêng, hẹp hơn hẳn
+    # khách workspace. Chỉ đụng được preview ĐÃ CÔ LẬP MẠNG của đúng hồ sơ được chia sẻ;
+    # KHÔNG tự mở/tắt browser (phiên do skill mở và thu), không gắn file của máy, không
+    # Drive, không danh sách hồ sơ (tên hồ sơ không rời máy). Tải lên chỉ khi chủ cho.
+    if scope.get("public"):
+        try:
+            from tubecli.extensions.browser.routes import _resolve_profile_for_port, port_is_isolated
+        except Exception:
+            return False
+
+        def _mine(port_s: str) -> bool:
+            port = int(port_s)
+            return (_resolve_profile_for_port(port) or "") in profiles and port_is_isolated(port)
+
+        # (không /status: nó trả tên hồ sơ — khung xem của Town nhận cổng thẳng từ skill)
+        mo = _re.match(r"^/api/v1/browser/preview/screenshot/(\d+)$", p)
+        if mo and m == "GET":
+            return _mine(mo.group(1))
+        mo = _re.match(r"^/api/v1/browser/preview/(?:upload|upload-chunk|upload-finalize)/(\d+)$", p)
+        if mo and m == "POST":
+            return str(scope.get("upload") or "off") == "media" and _mine(mo.group(1))
+        return False
+
     if m == "GET" and p in ("/api/v1/browser/status", "/api/v1/browser/profiles"):
         return True
 

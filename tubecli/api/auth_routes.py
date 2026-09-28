@@ -159,15 +159,22 @@ async def guest_login(body: GuestLoginRequest, request: Request, response: Respo
     try:
         from tubecli.core.origin_guard import remember_host
 
-        remember_host(request.headers.get("origin", ""), request.headers.get("host", ""))
+        remember_host(request.headers.get("origin", ""), request.headers.get("host", ""),
+                      trust_origin=False)
     except Exception:
         pass
     response = JSONResponse(content={"ok": True})
+    # Sống ĐÚNG bằng hạn token (phiên công khai 5–60 phút, workspace 30 phút); secure khi
+    # đi https (tunnel) — cookie khách không được lộ trên http trần.
+    remaining = max(60, int(auth.guest_token_exp(body.guest_token) or 0) - int(__import__("time").time()))
+    https = (request.headers.get("x-forwarded-proto", "").lower() == "https"
+             or request.url.scheme == "https")
     response.set_cookie(
         auth.GUEST_COOKIE, body.guest_token,
-        max_age=auth.GUEST_TTL_SECONDS,
+        max_age=remaining,
         httponly=True,
         samesite="lax",
+        secure=https,
         path="/",
     )
     return response
