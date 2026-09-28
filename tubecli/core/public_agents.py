@@ -271,6 +271,9 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
 
 BROWSER_MINUTES = (15, 5, 60)          # mặc định, tối thiểu, tối đa — một phiên của người lạ
 BROWSER_UPLOADS = ("media", "off")     # media = ảnh/video/PDF từ MÁY NGƯỜI XEM; off = cấm
+# Giá thuê trình duyệt (xu/PHÚT, 0 = miễn phí) — user 29/9 «cho thuê browser giá theo thời lượng phiên».
+# = BROWSER_PRICE_MAX của cloud (lib/browserRent.js). Cloud giữ tiền, tính phút thực, trả chủ.
+BROWSER_PRICE_MAX = 5000
 
 
 def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
@@ -290,8 +293,15 @@ def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any
     except (TypeError, ValueError):
         mins = dflt
     up = str(raw.get("browser_upload") or old.get("browser_upload") or BROWSER_UPLOADS[0]).strip().lower()
+    try:
+        price = int(raw.get("browser_price") if raw.get("browser_price") not in (None, "")
+                    else old.get("browser_price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    # browser_minutes = TRẦN mỗi phiên; khi có giá, khách chọn số phút ≤ trần (cloud giữ tiền theo nó).
     return {"browser_profile": bp, "browser_minutes": max(lo, min(hi, mins)),
-            "browser_upload": up if up in BROWSER_UPLOADS else BROWSER_UPLOADS[0]}
+            "browser_upload": up if up in BROWSER_UPLOADS else BROWSER_UPLOADS[0],
+            "browser_price": max(0, min(BROWSER_PRICE_MAX, price))}
 
 
 HIRE_UNITS = ("job", "minute")
@@ -489,6 +499,12 @@ def _profile_row(entry: Dict[str, Any], load: Optional[Dict[str, float]] = None)
            "vis": vis if vis in VISIBILITIES else DEFAULT_VISIBILITY}
     if hire is not None:
         row["hire"] = hire
+    if "browser.remote" in skills:
+        # Giá thuê trình duyệt (xu/phút) + trần phút/phiên: cloud hiện cho khách chọn số phút, GIỮ
+        # tiền theo đó rồi chốt theo phút thực. Tên hồ sơ trình duyệt KHÔNG bao giờ rời máy.
+        dflt, lo, hi = BROWSER_MINUTES
+        row["browser"] = {"price": max(0, min(BROWSER_PRICE_MAX, int(st.get("browser_price") or 0))),
+                          "minutes_max": max(lo, min(hi, int(st.get("browser_minutes") or dflt)))}
     return row
 
 

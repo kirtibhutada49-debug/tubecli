@@ -148,6 +148,14 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
             raise PublicSkillError("browser_failed", status=502)
 
         minutes = int(st.get("browser_minutes") or 15)
+        # Khách THUÊ theo phút (cloud đã giữ tiền đúng số phút này): phiên dài đúng số đã trả,
+        # không quá trần chủ đặt. Không gửi → cả trần như trước (agent miễn phí, cloud cũ).
+        try:
+            want = int(req.get("minutes") or 0)
+        except (TypeError, ValueError):
+            want = 0
+        if want > 0:
+            minutes = max(1, min(minutes, want))
         ttl = max(60, min(3600, minutes * 60))
         sid = secrets.token_hex(8)
         upload = "media" if str(st.get("browser_upload") or "media") == "media" else "off"

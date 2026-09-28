@@ -418,6 +418,36 @@ check("mã người gọi = mã chủ → phiên «owner» dù chủ tắt tải
 check("người lạ vẫn theo cài đặt (tải lên tắt, 10 phút)",
       _x["upload"] == "off" and _sx["upload"] == "off" and _x["expires_in"] <= 600, (_x["upload"], _x["expires_in"]))
 
+
+# ── Thuê theo PHÚT (29/9): giá xu/phút trong cài đặt + hồ sơ đẩy; khách chọn số phút ≤ trần ──
+_np = pa.normalise({"name": "Tro Ly", "enabled": True, "skills": ["browser.remote"], "browser_profile": "shared",
+                    "browser_price": 999999, "browser_minutes": 30})
+check("giá thuê trình duyệt kẹp trần BROWSER_PRICE_MAX", _np["browser_price"] == pa.BROWSER_PRICE_MAX, _np)
+check("client cũ không gửi giá → giữ giá đang lưu",
+      pa.normalise({"name": "Tro Ly", "skills": []}, old=dict(_np, browser_price=120))["browser_price"] == 120)
+_ent = {"agent_id": "A9", "hash": "f" * 16, "settings": dict(_np, browser_price=120, name="Tro Ly")}
+_row = pa._profile_row(_ent)
+check("hồ sơ đẩy mang khối browser {price, minutes_max}, KHÔNG lộ tên hồ sơ",
+      _row.get("browser") == {"price": 120, "minutes_max": 30} and "shared" not in str(_row), _row)
+_ent2 = {"agent_id": "A8", "hash": "e" * 16, "settings": {"skills": ["douyin.resolve"], "name": "Khac"}}
+check("agent không bật skill trình duyệt → không có khối browser", "browser" not in pa._profile_row(_ent2))
+
+
+async def rent_minutes():
+    a = await pb.resolve('{"action":"start","minutes":3}', {"_agent_id": "A5", "_caller": "dddd4444", "_settings": ST})
+    await pb._end("A5", a["session"])
+    b = await pb.resolve('{"action":"start","minutes":99}', {"_agent_id": "A6", "_caller": "eeee5555", "_settings": ST})
+    await pb._end("A6", b["session"])
+    c = await pb.resolve('{"action":"start","minutes":"x"}', {"_agent_id": "A7", "_caller": "ffff6666", "_settings": ST})
+    await pb._end("A7", c["session"])
+    return a, b, c
+
+
+_a, _b, _c = asyncio.run(rent_minutes())
+check("khách thuê 3 phút → phiên đúng 3 phút", 170 <= _a["expires_in"] <= 180, _a["expires_in"])
+check("xin quá trần (99) → kẹp về trần chủ đặt (10 phút)", 590 <= _b["expires_in"] <= 600, _b["expires_in"])
+check("số phút rác → cả trần như trước", 590 <= _c["expires_in"] <= 600, _c["expires_in"])
+
 shutil.rmtree(_tmp, ignore_errors=True)
 print(f"\n{passed} pass, {failed} fail")
 sys.exit(1 if failed else 0)

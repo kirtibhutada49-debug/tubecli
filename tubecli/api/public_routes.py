@@ -51,6 +51,8 @@ class PublicAgentSettings(BaseModel):
     browser_profile: Optional[str] = None
     browser_minutes: Optional[int] = None
     browser_upload: Optional[str] = None
+    # Giá thuê trình duyệt, xu/phút (0 = miễn phí). browser_minutes là TRẦN mỗi phiên.
+    browser_price: Optional[int] = None
     # Nhận việc THUÊ từ Chợ mẫu (làm video từ mẫu của máy): bật/tắt, giá (xu), kiểu tính
     # (job = trọn gói | minute = theo phút), trần phút, danh sách TÊN mẫu phục vụ.
     hire_on: Optional[bool] = None
