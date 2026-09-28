@@ -6,6 +6,7 @@ khách ghi vào thư mục tạm (không đụng guest_tokens.json của máy)."
 import asyncio
 import io
 import os
+import re
 import sys
 import tempfile
 import types
@@ -221,6 +222,24 @@ async def expiry():
 s = asyncio.run(expiry())
 check("hết giờ → tự thu token + tắt browser", "A2" not in pb._sessions and auth.guest_scope_for(s["token"]) is None)
 check("hạn cookie khách = hạn token", auth.guest_token_exp(r1["token"]) == 0)
+
+# ── Hai lỗi chỉ lộ khi chạy thật (e2e 28/9) ──────────────────────────────────
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_bm = open(os.path.join(_root, "tubecli", "extensions", "browser", "browser_manager.js"), encoding="utf-8").read()
+_iso = _bm[_bm.index("if (isolate) {\n            delete process.env"):]   # mở text mode: CRLF đã thành \n
+_iso = _iso[:_iso.index("// ── 3. Launch")]
+_m = re.search(r"if \(/(\^--\(proxy-bypass-list[^/]*)/", _iso)
+_args = ["--no-first-run", "--proxy-bypass-list=localhost,127.0.0.1,::1", "--host-resolver-rules=MAP * 127.0.0.1",
+         "--proxy-server=direct://", "--remote-debugging-port=0"]
+_left = [a for a in _args if not (_m and re.match(_m.group(1), a))]
+check("cô lập: bỏ cờ bypass/proxy/resolver tự đặt (Chromium lấy cờ CUỐI, đè <-loopback> của Playwright)",
+      _left == ["--no-first-run", "--remote-debugging-port=0"], _left)
+check("cô lập: ép loopback đi qua net_guard", "'--proxy-bypass-list=<-loopback>'" in _iso)
+_rt = open(os.path.join(_root, "tubecli", "extensions", "browser", "routes.py"), encoding="utf-8").read()
+_ws = _rt[_rt.index("async def ws_preview_proxy"):]
+_ws = _ws[_ws.index("for task in pending:"):_ws.index("except ImportError:")]
+check("preview tắt → proxy ĐÓNG socket khách (4001 khi đã thu quyền)",
+      "websocket.close(code=_code" in _ws and "4001" in _ws)
 
 shutil.rmtree(_tmp, ignore_errors=True)
 print(f"\n{passed} pass, {failed} fail")

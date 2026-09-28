@@ -3661,6 +3661,20 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
         )
         for task in pending:
             task.cancel()
+        # Preview tắt (dừng phiên / hết giờ / sập) thì forward_to_client xong TRƯỚC và
+        # guest_expiry bị huỷ theo — không ai gửi khung đóng, socket phía khách treo qua
+        # tunnel, trang không biết phiên đã hết (e2e 28/9). Đóng tường minh, kèm lý do.
+        _code, _reason = 1000, "preview_closed"
+        if guest_ok:
+            try:
+                if not auth.guest_scope_for(guest_cookie):
+                    _code, _reason = 4001, "guest_expired"
+            except Exception:
+                pass
+        try:
+            await websocket.close(code=_code, reason=_reason)
+        except Exception:
+            pass
     except ImportError:
         preview_logger.error("[WS Proxy] aiohttp not installed.")
         try:

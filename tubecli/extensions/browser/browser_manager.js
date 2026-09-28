@@ -2378,7 +2378,17 @@ export class BrowserManager {
             }
             netGuard = await startNetGuard({ upstream, log: (m) => console.log(m) });
             proxyOption = { server: `http://127.0.0.1:${netGuard.port}` };
-            launchArgs.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--disable-quic');
+            // Cờ proxy TỰ ĐẶT phải bỏ hết: Playwright chèn args của người gọi SAU cờ proxy của nó và
+            // Chromium lấy lần xuất hiện CUỐI — '--proxy-bypass-list=localhost,127.0.0.1,::1' ở trên
+            // đè mất <-loopback>, nên chuyển hướng tới http://127.0.0.1:<cổng> đi THẲNG, né guard
+            // (e2e 28/9: ERR_CONNECTION_REFUSED từ chính 127.0.0.1). host-resolver-rules cũng bỏ:
+            // nó ánh xạ được tên miền về loopback trước khi tới proxy.
+            for (let i = launchArgs.length - 1; i >= 0; i--) {
+                if (/^--(proxy-bypass-list|proxy-server|proxy-pac-url|no-proxy-server|proxy-auto-detect|host-resolver-rules|remote-allow-origins)(=|$)/
+                        .test(String(launchArgs[i]))) launchArgs.splice(i, 1);
+            }
+            launchArgs.push('--proxy-bypass-list=<-loopback>',
+                '--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--disable-quic');
             console.log(`[ShardX] Cô lập mạng: mọi kết nối qua net_guard 127.0.0.1:${netGuard.port}`);
         }
 
