@@ -233,7 +233,9 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
     except (TypeError, ValueError):
         cap = DEFAULT_DAILY_CAP
     enabled = bool(raw.get("enabled"))
-    if enabled and not skills:
+    # Agent «chỉ cho thuê» hợp lệ: không skill chat nào nhưng bật nhận việc + có mẫu.
+    _hire_on_now = raw.get("hire_on") if "hire_on" in raw else (old or {}).get("hire_on")
+    if enabled and not skills and not _hire_on_now:
         raise ValueError("no_skills")
     # Không gửi trường → giữ nguyên thứ đang lưu (mặc định cho agent mới là công khai).
     # Gửi chữ lạ → công khai, KHÔNG đoán là riêng tư: đoán sai kiểu đó làm agent đang
@@ -261,6 +263,7 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
             v = dflt
         out[k] = max(lo, min(hi, v))
     out.update(_browser_settings(raw, old or {}))
+    out.update(_hire_settings(raw, old or {}))
     if enabled and "browser.remote" in skills and not out["browser_profile"]:
         raise ValueError("no_browser_profile")
     return out
@@ -289,6 +292,61 @@ def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any
     up = str(raw.get("browser_upload") or old.get("browser_upload") or BROWSER_UPLOADS[0]).strip().lower()
     return {"browser_profile": bp, "browser_minutes": max(lo, min(hi, mins)),
             "browser_upload": up if up in BROWSER_UPLOADS else BROWSER_UPLOADS[0]}
+
+
+HIRE_UNITS = ("job", "minute")
+HIRE_PRICE_MAX = 500000          # = PRICE_MAX của cloud (lib/hire.js)
+HIRE_MINUTES_MAX = 60
+HIRE_PRESETS_MAX = 12
+
+
+def _hire_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
+    """Cài đặt NHẬN VIỆC THUÊ (Chợ mẫu). Trường không gửi → giữ bản đang lưu.
+
+    `hire_presets` = TÊN các mẫu (preset Content Studio) agent phục vụ — user chốt 28/9:
+    chủ agent cài mẫu, khách không mua, chỉ chọn trong danh sách này. Mã Chợ của từng mẫu
+    máy tự tra lúc ĐẨY hồ sơ (market_links.json), không lưu ở đây — đăng lại mẫu lên Chợ
+    được mã mới thì hồ sơ đẩy sau tự đúng."""
+    on = bool(raw.get("hire_on")) if "hire_on" in raw else bool(old.get("hire_on"))
+    try:
+        price = int(raw.get("hire_price") if raw.get("hire_price") not in (None, "")
+                    else old.get("hire_price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    unit = str(raw.get("hire_unit") or old.get("hire_unit") or "job").strip().lower()
+    try:
+        mmax = int(raw.get("hire_minutes_max") if raw.get("hire_minutes_max") not in (None, "")
+                   else old.get("hire_minutes_max") or 10)
+    except (TypeError, ValueError):
+        mmax = 10
+    if "hire_presets" in raw:
+        presets, seen = [], set()
+        for p in (raw.get("hire_presets") or [])[:HIRE_PRESETS_MAX]:
+            name = _clean_text(p, 60)
+            if name and name not in seen:
+                seen.add(name)
+                presets.append(name)
+    else:
+        presets = [str(x) for x in (old.get("hire_presets") or [])][:HIRE_PRESETS_MAX]
+    if ("hire_on" in raw and on) and not presets:
+        raise ValueError("no_hire_presets")
+    return {"hire_on": on, "hire_price": max(0, min(HIRE_PRICE_MAX, price)),
+            "hire_unit": unit if unit in HIRE_UNITS else "job",
+            "hire_minutes_max": max(1, min(HIRE_MINUTES_MAX, mmax)),
+            "hire_presets": presets}
+
+
+def _market_links() -> Dict[str, str]:
+    """{tên mẫu: mã Chợ} — Content Studio ghi khi «Bán trên Chợ» (market_links.json)."""
+    try:
+        from tubecli.config import DATA_DIR
+
+        p = os.path.join(str(DATA_DIR), "content_studio", "market_links.json")
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except Exception:      # noqa: BLE001 — chưa bán mẫu nào / Studio chưa cài
+        return {}
 
 
 def _profile_names() -> set:
@@ -362,7 +420,9 @@ def _agents_by_id() -> Dict[str, Any]:
 
 
 def public_entries() -> List[Dict[str, Any]]:
-    """[{agent_id, hash, settings}] của agent ĐANG bật, còn tồn tại, còn ít nhất một skill."""
+    """[{agent_id, hash, settings}] của agent ĐANG bật, còn tồn tại, còn skill chat HOẶC
+    đang nhận việc thuê (hire_on) — agent «chỉ cho thuê» không có skill chat nào vẫn phải
+    được đẩy lên Town, không thì trang mẫu không bao giờ thấy nó."""
     from tubecli.core.town_telemetry import agent_hash
 
     alive = _agents_by_id()
@@ -373,7 +433,7 @@ def public_entries() -> List[Dict[str, Any]]:
         if aid not in alive or not isinstance(st, dict) or not st.get("enabled"):
             continue
         skills = [s for s in st.get("skills") or [] if s in PUBLIC_SKILLS]
-        if not skills:
+        if not skills and not (st.get("hire_on") and st.get("hire_presets")):
             continue
         out.append({"agent_id": aid, "hash": agent_hash(aid), "settings": {**st, "skills": skills}})
     return out
@@ -405,13 +465,31 @@ def _profile_row(entry: Dict[str, Any], load: Optional[Dict[str, float]] = None)
     """Hồ sơ đẩy lên cloud. Chỉ ngưỡng và cờ «mệt» — KHÔNG số CPU/RAM thô của máy."""
     st = entry["settings"]
     vis = str(st.get("visibility") or DEFAULT_VISIBILITY)
-    return {"a": entry["hash"], "name": st.get("name", ""), "bio": st.get("bio", ""),
-            "skills": st["skills"], "cap": int(st.get("daily_cap") or DEFAULT_DAILY_CAP),
-            "warn": threshold(st, "warn_pct"), "par": threshold(st, "max_parallel"),
-            "tired": is_tired(st, load),
-            # Cloud mới mới hiểu trường này; cloud cũ bỏ qua và vẫn coi là công khai —
-            # nên KHÔNG được bật «riêng tư» ở máy rồi tin là cloud đã giấu.
-            "vis": vis if vis in VISIBILITIES else DEFAULT_VISIBILITY}
+    skills = list(st["skills"])
+    hire = None
+    if st.get("hire_on") and st.get("hire_presets"):
+        links = _market_links()
+        # Chỉ mẫu ĐÃ CÓ MÃ trên Chợ mới lên trang thuê (cloud cũng bỏ mục thiếu mã).
+        hire = {"on": True, "price": int(st.get("hire_price") or 0),
+                "unit": str(st.get("hire_unit") or "job"),
+                "minutes_max": int(st.get("hire_minutes_max") or 10),
+                "presets": [{"n": n, "c": links.get(n, "")} for n in st["hire_presets"]]}
+        # cloud đòi skill 'content.video' trong hồ sơ để hiện nút thuê — nó KHÔNG phải
+        # skill chat của máy (invoke từ chối như mọi skill lạ), chỉ là cờ trên Town.
+        if "content.video" not in skills:
+            skills.append("content.video")
+    elif "hire_on" in st:
+        hire = {"on": False, "price": int(st.get("hire_price") or 0)}
+    row = {"a": entry["hash"], "name": st.get("name", ""), "bio": st.get("bio", ""),
+           "skills": skills, "cap": int(st.get("daily_cap") or DEFAULT_DAILY_CAP),
+           "warn": threshold(st, "warn_pct"), "par": threshold(st, "max_parallel"),
+           "tired": is_tired(st, load),
+           # Cloud mới mới hiểu trường này; cloud cũ bỏ qua và vẫn coi là công khai —
+           # nên KHÔNG được bật «riêng tư» ở máy rồi tin là cloud đã giấu.
+           "vis": vis if vis in VISIBILITIES else DEFAULT_VISIBILITY}
+    if hire is not None:
+        row["hire"] = hire
+    return row
 
 
 # ── Chữ ký ───────────────────────────────────────────────────────────────────

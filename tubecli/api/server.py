@@ -96,10 +96,14 @@ _AUTH_EXEMPT_EXACT = {"/login", "/api/v1/auth/login", "/api/v1/auth/status",
                       # Route không có phiên nào để kiểm, và không chạy gì ngoài PUBLIC_SKILLS.
                       "/api/v1/public/invoke",
                       # danh mục giọng của skill — cùng khoá chữ ký, miền «catalog», chỉ đọc
-                      "/api/v1/public/catalog"}
+                      "/api/v1/public/catalog",
+                      # việc thuê từ Chợ mẫu — cùng khoá chữ ký, miền «hire» (core/public_hire)
+                      "/api/v1/public/hire"}
 # /s/ = link chia sẻ công khai của File Manager (token ngẫu nhiên là chìa khoá;
 # route tự kiểm hạn dùng + file còn tồn tại). Người nhận không có tài khoản.
-_AUTH_EXEMPT_PREFIX = ("/webui/static/", "/static/", "/s/")
+# /api/v1/public/hire/file/ = cloud lấy file đã giao của việc thuê — chữ ký HMAC miền
+# «hire-file» trên CHÍNH đường dẫn, route tự kiểm (không phiên nào để đòi).
+_AUTH_EXEMPT_PREFIX = ("/webui/static/", "/static/", "/s/", "/api/v1/public/hire/file/")
 
 
 def _auth_exempt(path: str) -> bool:

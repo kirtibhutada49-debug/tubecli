@@ -51,6 +51,13 @@ class PublicAgentSettings(BaseModel):
     browser_profile: Optional[str] = None
     browser_minutes: Optional[int] = None
     browser_upload: Optional[str] = None
+    # Nhận việc THUÊ từ Chợ mẫu (làm video từ mẫu của máy): bật/tắt, giá (xu), kiểu tính
+    # (job = trọn gói | minute = theo phút), trần phút, danh sách TÊN mẫu phục vụ.
+    hire_on: Optional[bool] = None
+    hire_price: Optional[int] = None
+    hire_unit: Optional[str] = None
+    hire_minutes_max: Optional[int] = None
+    hire_presets: Optional[List[str]] = None
 
 
 @router.get("/api/v1/public-agents")
@@ -155,3 +162,51 @@ async def public_invoke(request: Request):
     except public_agents.PublicSkillError as e:
         return JSONResponse(status_code=e.status, content={"ok": False, "code": e.code})
     return {"ok": True, "result": result}
+
+
+@router.post("/api/v1/public/hire")
+async def public_hire_accept(request: Request):
+    """CHỈ cloud gọi (chữ ký miền «hire») — nhận một việc thuê từ Chợ mẫu rồi trả lời NGAY;
+    video chạy nền bằng dây chuyền content_video, tiến độ máy tự báo về cloud."""
+    body = await request.body()
+    if len(body) > 16384:
+        return JSONResponse(status_code=413, content={"ok": False, "code": "too_large"})
+    why = public_agents.verify_invoke(
+        request.headers.get("x-town-ts"), request.headers.get("x-town-nonce"),
+        request.headers.get("x-town-sig"), body, domain="hire")
+    if why:
+        status = 503 if why == "not_configured" else 401
+        return JSONResponse(status_code=status, content={"ok": False, "code": why})
+    try:
+        import json
+
+        payload = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_request"})
+    from tubecli.core import public_hire
+    try:
+        return await public_hire.receive(payload)
+    except public_agents.PublicSkillError as e:
+        return JSONResponse(status_code=e.status, content={"ok": False, "code": e.code})
+
+
+@router.api_route("/api/v1/public/hire/file/{code}/{n}", methods=["GET", "HEAD"])
+async def public_hire_file(code: str, n: int, request: Request):
+    """Cloud lấy file đã giao của một việc thuê. Chữ ký HMAC miền «hire-file» ký trên CHÍNH
+    đường dẫn (cloud: `hire-file.<ts>.<nonce>.<path>`) — cùng nonce/cửa sổ với invoke, nên
+    một request bắt được không phát lại được."""
+    from fastapi.responses import FileResponse
+
+    path = f"/api/v1/public/hire/file/{code}/{n}"
+    why = public_agents.verify_invoke(
+        request.headers.get("x-town-ts"), request.headers.get("x-town-nonce"),
+        request.headers.get("x-town-sig"), path.encode("utf-8"), domain="hire-file")
+    if why:
+        status = 503 if why == "not_configured" else 401
+        return JSONResponse(status_code=status, content={"ok": False, "code": why})
+    from tubecli.core import public_hire
+
+    f = public_hire.file_for(code, n)
+    if not f:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "file_not_found"})
+    return FileResponse(f["path"], media_type=f["type"], filename=f["name"])

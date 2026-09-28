@@ -120,8 +120,12 @@ pa.set_settings("ag-2", {"enabled": False, "name": "Second", "skills": ["douyin.
 entries = pa.public_entries()
 check("chỉ agent ĐANG bật vào hồ sơ", [e["agent_id"] for e in entries] == ["ag-1"], entries)
 row = pa._profile_row(entries[0])
-check("hồ sơ chỉ gồm a/name/bio/skills/cap/warn/par/tired/vis — không id thật, không tên agent gốc",
-      set(row) == {"a", "name", "bio", "skills", "cap", "warn", "par", "tired", "vis"}
+# «hire» vào danh sách trắng từ .180: agent đã LƯU cài đặt luôn mang khối hire (kể cả
+# {'on': False} — cloud cần dấu TẮT tường minh: thiếu khối nghĩa là «giữ nguyên thứ đang
+# lưu», chủ tắt nhận việc mà cloud vẫn treo biển thuê). Chi tiết ở public_hire_test.py.
+check("hồ sơ chỉ gồm a/name/bio/skills/cap/warn/par/tired/vis/hire — không id thật, không tên agent gốc",
+      set(row) == {"a", "name", "bio", "skills", "cap", "warn", "par", "tired", "vis", "hire"}
+      and row["hire"] == {"on": False, "price": 0}
       and "ag-1" not in json.dumps(row)
       and "Nhà làm phim" not in json.dumps(row, ensure_ascii=False), row)
 check("không đặt gì thì hồ sơ là CÔNG KHAI (cài đặt cũ giữ nguyên nghĩa)", row["vis"] == "public", row["vis"])
