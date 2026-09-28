@@ -2207,8 +2207,8 @@ def _step_studio(state: Dict, options: Dict) -> None:
         lang_code = str(state.get("language") or "vi")
         agent_meta = {"aspect_ratio": state.get("aspect_ratio") or options.get("aspect_ratio") or DEFAULTS["aspect_ratio"],
                       "source": ACTOR, "agent_id": str(agent.id)}
-        # Giọng đọc: lời nói trong chat > giọng lưu trong preset > giọng edge theo
-        # ngôn ngữ. Trước đây pipeline luôn ghi đè tts_voice/tts_engine của preset.
+        # Giọng đọc: lời nói trong chat > giọng lưu trong preset > giọng MẶC ĐỊNH của
+        # agent > giọng edge theo ngôn ngữ. Trước đây pipeline luôn ghi đè giọng của preset.
         pm = _preset_meta(state)
         opt_engine = str(options.get("tts_engine") or "").lower()
         if opt_engine == "auto":                 # "auto" là "tuỳ pipeline", không phải một engine để ghi lên drama
@@ -2217,8 +2217,14 @@ def _step_studio(state: Dict, options: Dict) -> None:
             agent_meta["tts_voice"] = str(options.get("tts_voice") or pm.get("tts_voice") or _edge_voice(lang_code))
             agent_meta["tts_engine"] = str(opt_engine or pm.get("tts_engine") or "edge")
         elif not pm.get("tts_voice") and not pm.get("tts_engine"):
-            agent_meta["tts_voice"] = _edge_voice(lang_code)
-            agent_meta["tts_engine"] = "edge"
+            a_engine, a_voice = _agent_voice_default(state)
+            if a_engine == "capcut":
+                agent_meta["tts_engine"] = "capcut"
+                if a_voice:
+                    agent_meta["tts_voice"] = a_voice
+            else:
+                agent_meta["tts_voice"] = a_voice or _edge_voice(lang_code)
+                agent_meta["tts_engine"] = "edge"
         body = {
             "title": title, "style": options.get("style") or DEFAULTS["style"],
             "language": lang_code,
@@ -3320,6 +3326,13 @@ def _step_images(state: Dict, options: Dict) -> None:
     _ip, _im = _model_ref(_ov.get("image_model"))
     if _im:
         body.update(image_provider=_ip or None, image_model=_im, force_model=True)
+    else:
+        # Bộ vẽ MẶC ĐỊNH của agent: gửi làm «dự phòng» — Studio dùng nó THAY Cài đặt chung nhưng vẫn sau model
+        # khoá theo style (thuỷ mặc, Edo…) và model riêng từng nhịp. Gửi thành image_provider là đè cả khoá style.
+        # Studio cũ không biết trường này thì vẽ theo Cài đặt chung như trước.
+        _ap, _am = _agent_image_default(state)
+        if _ap:
+            body.update(fallback_image_provider=_ap, fallback_image_model=_am)
     redraw = str(_ov.get("redraw_images") or "")
     if redraw and (state.get("checkpoint") or {}).get("redraw_done") != redraw:
         body["overwrite"] = True
@@ -3509,10 +3522,30 @@ def _preset_voice(state: Dict, options: Dict) -> Tuple[str, str, str]:
     opt_engine = str(options.get("tts_engine") or "").lower()
     if opt_engine == "auto":
         opt_engine = ""
-    engine = str(opt_engine or pm.get("tts_engine") or "auto").lower()
+    engine = str(opt_engine or pm.get("tts_engine") or "").lower()
     voice = str(options.get("tts_voice") or pm.get("tts_voice") or "")
+    if not engine and not voice:
+        # Chat lẫn mẫu đều không chọn → giọng MẶC ĐỊNH của agent (Flow › agent › Cơ bản)
+        engine, voice = _agent_voice_default(state)
+    engine = engine or "auto"
     email = str(options.get("capcut_email") or pm.get("tts_email") or "")
     return engine, voice, email
+
+
+def _agent_voice_default(state: Dict) -> Tuple[str, str]:
+    try:
+        from tubecli.core.agent_media import agent_voice
+        return agent_voice(state.get("agent"))
+    except Exception:       # noqa: BLE001
+        return "", ""
+
+
+def _agent_image_default(state: Dict) -> Tuple[str, str]:
+    try:
+        from tubecli.core.agent_media import agent_image
+        return agent_image(state.get("agent"))
+    except Exception:       # noqa: BLE001
+        return "", ""
 
 
 def _everai_key() -> bool:
@@ -8219,10 +8252,14 @@ def _apply_retry_overrides(payload: Dict[str, Any], agent, options: Dict[str, An
     return agent
 
 
-def _retry_voice_now(options: Dict[str, Any], preset_meta: Dict[str, Any]) -> Dict[str, str]:
+def _retry_voice_now(options: Dict[str, Any], preset_meta: Dict[str, Any], agent: Any = None) -> Dict[str, str]:
     engine = str(options.get("tts_engine") or "").lower()
     if engine and engine != "auto":
         return {"engine": engine, "id": str(options.get("tts_voice") or ""), "source": "task"}
+    if not preset_meta.get("tts_engine") and not preset_meta.get("tts_voice"):
+        a_engine, a_voice = _agent_voice_default({"agent": agent})
+        if a_engine:
+            return {"engine": a_engine, "id": a_voice, "source": "agent"}
     return {"engine": str(preset_meta.get("tts_engine") or "auto"), "id": str(preset_meta.get("tts_voice") or ""),
             "source": "template"}
 
@@ -8265,7 +8302,9 @@ def retry_info(task_id: str) -> Dict[str, Any]:
                          if c and c != "auto"), "") or detect_language(str(ck.get("script") or "")) or "vi"
     try:
         from tubecli.core import image_gen as _ig
-        r = _ig.resolve_provider(None, None)
+        _ap, _am = _agent_image_default({"agent": agent})
+        # Bộ vẽ mặc định của agent đứng thay Cài đặt chung (xem _step_images) — hộp Retry báo đúng cái sẽ dùng
+        r = _ig.resolve_provider(_ap or None, _am or None)
         machine_img = f"{r.get('provider')}|{r.get('model')}" if r.get("ok") else ""
     except Exception:           # noqa: BLE001
         machine_img = ""
@@ -8275,7 +8314,7 @@ def retry_info(task_id: str) -> Dict[str, Any]:
             "text": {"agent": str(getattr(agent, "model", "") or ""), "override": str(ov.get("text_model") or "")},
             "image": {"machine": machine_img, "roles": {k: str(v) for k, v in roles.items() if v},
                       "override": str(ov.get("image_model") or "")},
-            "voice": {**_retry_voice_now(options, pmeta),
+            "voice": {**_retry_voice_now(options, pmeta, agent),
                       "override": {k: str(ov.get(k) or "") for k in ("tts_engine", "tts_voice", "capcut_email")}
                       if ov.get("tts_voice") else {}},
             "drawn": bool(ck.get("episode_id"))}

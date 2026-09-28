@@ -2154,6 +2154,11 @@ class AgentCreateRequest(PublishSettingsBase):
     timezone: Optional[str] = None
     language: Optional[str] = "auto"
     content_video_preset: Optional[str] = ""
+    # Giọng + bộ vẽ ảnh mặc định của agent (core/agent_media.py); "" = tự động / Cài đặt chung
+    tts_engine: Optional[str] = ""
+    tts_voice: Optional[str] = ""
+    image_provider: Optional[str] = ""
+    image_model: Optional[str] = ""
     auth: Optional[Dict] = {}
     cloud_api_keys: Optional[Dict] = {}
     enable_scraping: Optional[bool] = False
@@ -2229,6 +2234,10 @@ class AgentUpdateRequest(PublishSettingsBase):
     timezone: Optional[str] = None
     language: Optional[str] = None
     content_video_preset: Optional[str] = None
+    tts_engine: Optional[str] = None
+    tts_voice: Optional[str] = None
+    image_provider: Optional[str] = None
+    image_model: Optional[str] = None
     auth: Optional[Dict] = None
     cloud_api_keys: Optional[Dict] = None
     enable_scraping: Optional[bool] = None

@@ -77,5 +77,80 @@ mid = [{"start": 0, "end": 5, "text": "a"}, {"start": 5, "end": 5, "text": "b"},
 check("dồn cục ở GIỮA thì để nguyên (không đoán)", pr.rescue_collapsed(mid, 10) == mid)
 check("không có cue dồn cục thì trả nguyên", pr.rescue_collapsed(drift[:5], 148.33) == drift[:5])
 
+# ── Ghi phụ đề khít ô gốc (neo tâm \an5) ─────────────────────────────────────
+boxed = rd.build_ass([{"start": 0, "end": 2, "text": "Vậy thì bây giờ tôi sẽ dẫn mọi người đi tham quan cảnh"}],
+                     1024, 576, [0.118, 0.8795, 0.874, 0.962])
+check("có ô gốc → neo TÂM chữ vào tâm ô (\\an5\\pos), không ước số dòng",
+      r"{\an5\pos(508,530)}Vậy thì" in boxed, boxed.splitlines()[-1])
+check("cỡ chữ theo chiều cao ô (48px*0.4 kẹp ≥5.2% cạnh ngắn → 30)", ",Arial,30," in boxed)
+
+# ── Che phụ đề gốc + logo (reup_cover) ───────────────────────────────────────
+from tubecli.core import reup_cover as rc  # noqa: E402
+
+subs_, logos_ = rc.parse_detection('```json {"subtitles":[{"text":"字幕","box":[120,860,880,950]}],'
+                                   '"overlays":[{"kind":"logo","text":"柚","box":[0.02,0.03,0.06,0.1]}]} ```')
+check("đọc được cả phụ đề lẫn logo; thang 0..1000 quy về 0..1",
+      subs_[0]["box"] == [0.12, 0.86, 0.88, 0.95] and logos_[0]["kind"] == "logo")
+check("mảng trần (kiểu cũ) = toàn phụ đề; rác → rỗng",
+      len(rc.parse_detection('[{"box":[0.1,0.8,0.9,0.9]}]')[0]) == 1 and rc.parse_detection("xin lỗi") == ([], []))
+agg = rc.aggregate([[0.3, 0.85, 0.7, 0.9], [0.25, 0.86, 0.72, 0.91]])
+check("gộp ô: dải tối thiểu 72 % bề ngang, căn quanh tâm", round(agg[2] - agg[0], 2) == 0.72, agg)
+check("delogo đúng ô, chừa mép ≥1px",
+      rc.cover_graph([0.0, 0.84, 1.0, 0.93], 576, 768, "delogo") == "[0:v]delogo=x=1:y=644:w=574:h=70[vc]",
+      rc.cover_graph([0.0, 0.84, 1.0, 0.93], 576, 768, "delogo"))
+blur = rc.cover_graph([0.14, 0.84, 0.86, 0.93], 576, 768, "blur", inp="vlogo", out="vcov")
+check("blur/pixel/fill: nhoè mép qua mặt nạ gblur, đọc đúng luồng vào/ra",
+      blur.startswith("[vlogo]split") and "alphamerge" in blur and blur.endswith("[vcov]"))
+corner = rc.filter_by_size([{"box": [0.058, 0.03, 0.312, 0.094]}, {"box": [0.688, 0.03, 0.982, 0.094]},
+                            {"box": [0.35, 0.02, 0.6, 0.08]}, {"box": [0.8, 0.85, 0.97, 0.95]},
+                            {"box": [0.0, 0.4, 0.1, 0.5]}, {"box": [0.0, 0.0, 0.5, 0.3]}])
+check("logo CHỈ ở hai góc trên (user 28/9) — giữa trên, đáy, cạnh bên, ô to đều bỏ",
+      [c["box"][0] for c in corner] == [0.058, 0.688], corner)
+clus = rc.cluster_overlays([[{"box": [0.02, 0.03, 0.3, 0.08], "text": "LAB"}], [], [],
+                            [{"box": [0.03, 0.03, 0.31, 0.09], "text": ""}], [], []], 6)
+check("cửa bền: thấy 2/6 khung < 60 % → loại; need=1 thì giữ để cửa tĩnh chặt quyết",
+      clus == [] and len(rc.cluster_overlays([[{"box": [0.02, 0.03, 0.3, 0.08]}]] + [[]] * 5, 6, need=1)) == 1)
+pad = rc.pad_logo([0.07, 0.0445, 0.3, 0.0801])
+check("nới ô logo (vision trả khít nét chữ)", pad[0] < 0.07 and pad[1] < 0.0445 and pad[3] > 0.0801, pad)
+
+# ── Giọng / ảnh mặc định của agent ───────────────────────────────────────────
+from tubecli.core import agent_media as am  # noqa: E402
+from tubecli.core.agent import Agent  # noqa: E402
+
+ag = Agent(name="t", tts_engine="CapCut", tts_voice="vi_female_huong", image_provider="9router",
+           image_model="ag/gemini-3.1-flash-image")
+check("agent giữ giọng + bộ vẽ mặc định (engine chữ hoa vẫn nhận)",
+      am.agent_voice(ag) == ("capcut", "vi_female_huong") and am.agent_image(ag) == ("9router", "ag/gemini-3.1-flash-image"))
+bad = Agent(name="x", tts_engine="banana", tts_voice="../etc", image_provider="evil", image_model="a b")
+check("giá trị lạ → rỗng (= tự động), không làm agent hỏng",
+      (bad.tts_engine, bad.tts_voice, bad.image_provider, bad.image_model) == ("", "", "", ""))
+check("to_dict có đủ 4 trường", all(k in ag.to_dict() for k in am.MEDIA_FIELDS))
+check("đoán tiếng của giọng", [am.voice_lang("capcut", v) for v in
+                               ("vi_female_huong", "BV075_streaming", "en_us_002", "ICL_jp_female_tt_you")]
+      == ["vi", "vi", "en", "ja"] and am.voice_lang("edge", "zh-CN-XiaoxiaoNeural") == "zh")
+check("đoán tiếng phụ đề", [am.guess_lang([t]) for t in ("今天我们聊人工智能", "Xin chào các bạn", "こんにちは元気です", "hello")]
+      == ["zh", "vi", "ja", "en"])
+
+import types  # noqa: E402
+
+am_real = am._agent
+am._agent = lambda x: ag if x == "A" else (types.SimpleNamespace(tts_engine="edge", tts_voice="en-US-GuyNeural")
+                                           if x == "E" else None)
+try:
+    check("người xem chọn giọng Edge → đúng giọng đó",
+          pr.pick_voice({"voice": "en-US-GuyNeural", "lang": "en", "_agent_id": "A"}, []) ==
+          ("edge", "en-US-GuyNeural", "en-US-JennyNeural"))
+    check("không chọn → giọng MẶC ĐỊNH CapCut của agent",
+          pr.pick_voice({"voice": "", "lang": "vi", "_agent_id": "A"}, []) == ("capcut", "vi_female_huong", "vi-VN-HoaiMyNeural"))
+    check("giọng mặc định khác tiếng phụ đề (vi ↔ en) → Edge đúng tiếng",
+          pr.pick_voice({"voice": "", "lang": "en", "_agent_id": "A"}, []) == ("edge", "en-US-JennyNeural", "en-US-JennyNeural"))
+    check("agent đặt Edge → dùng giọng Edge đó",
+          pr.pick_voice({"voice": "", "lang": "en", "_agent_id": "E"}, [])[:2] == ("edge", "en-US-GuyNeural"))
+    check("agent chưa đặt + giữ tiếng gốc → Edge theo tiếng đoán từ phụ đề",
+          pr.pick_voice({"voice": "", "lang": "", "_agent_id": "Z"}, ["我们今天聊聊人工智能的发展"])[:2]
+          == ("edge", "zh-CN-XiaoxiaoNeural"))
+finally:
+    am._agent = am_real
+
 print(f"\n{passed} pass, {failed} fail")
 sys.exit(1 if failed else 0)

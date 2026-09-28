@@ -35,6 +35,7 @@ MAX_PARALLEL_JOBS = 2
 EXTRACT_TIMEOUT_SEC = 10 * 60
 LANGS = {"", "vi", "en", "ja", "zh"}
 MODES = {"replace", "mix"}
+COVER_CHOICES = {"delogo", "blur", "pixel", "fill", "none"}   # none = giữ phụ đề gốc
 _JOB_RE = re.compile(r"^[a-f0-9]{16}$")
 
 _jobs: Dict[str, Dict[str, Any]] = {}   # id -> {status, step, done, total, code, result, created, task}
@@ -133,6 +134,31 @@ async def _extract(file_path: str, translate_to: str, jid: str) -> list:
     raise PublicSkillError("timeout", status=504)
 
 
+def pick_voice(opts: Dict[str, Any], texts: list) -> tuple:
+    """(engine, voice, fallback_edge_voice) cho một job.
+
+    Người xem chọn giọng Edge trên Town → dùng đúng giọng đó. Không chọn → giọng MẶC ĐỊNH
+    của agent (Flow › agent › Cơ bản), trừ khi giọng đó rõ ràng khác tiếng của phụ đề
+    (giọng Việt đọc phụ đề đã dịch sang Anh nghe rất lạ) → Edge đúng tiếng. Agent chưa
+    đặt → Edge theo tiếng của phụ đề."""
+    from tubecli.core import agent_media as am
+
+    lang = str(opts.get("lang") or "") or am.guess_lang(texts) or "vi"
+    fallback = am.EDGE_BY_LANG.get(lang, "vi-VN-HoaiMyNeural")
+    chosen = str(opts.get("voice") or "")
+    if chosen:
+        return "edge", chosen, fallback
+    engine, voice = am.agent_voice(str(opts.get("_agent_id") or ""))
+    vl = am.voice_lang(engine, voice)
+    if engine == "capcut" and (not vl or vl == lang):
+        return "capcut", voice, fallback
+    if engine == "edge" and voice and (not vl or vl == lang):
+        from tubecli.core.reup_dub import EDGE_VOICES
+        if voice in EDGE_VOICES:
+            return "edge", voice, fallback
+    return "edge", fallback, fallback
+
+
 _COLLAPSED = 0.05    # cue ngắn hơn chừng này = bị kẹp về cuối đoạn, không phải câu thật
 
 
@@ -171,8 +197,11 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
     from tubecli.core import public_share as ps
     from tubecli.core import reup_dub
 
+    from tubecli.core import reup_cover
+
     jdir = _root() / jid
     jdir.mkdir(parents=True, exist_ok=True)
+    det_task = None
     try:
         # 1. Link → media gốc, đúng đường skill Douyin công khai (không cookie chủ)
         _set(jid, step="download")
@@ -187,6 +216,14 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
             raise PublicSkillError("download_failed", status=502)
         src = jdir / "src.mp4"
         await asyncio.to_thread(_download_blocking, url, src)
+
+        # 1.5 Dò ô phụ đề GỐC cháy sẵn (Gemini vision) — chạy SONG SONG với bước tách phụ
+        # đề, vì hai việc không phụ thuộc nhau; che thật thì gộp vào lần encode cuối.
+        cover_mode = str(opts.get("cover") or "none")
+        want_logo = str(opts.get("logo") or "0") == "1"
+        ff = reup_dub.find_ffmpeg()
+        if (cover_mode in reup_cover.COVER_MODES or want_logo) and ff:
+            det_task = asyncio.create_task(reup_cover.detect_subtitle_box(str(src), ff, jdir))
 
         # 2. Tách phụ đề (+ dịch nếu chọn)
         _set(jid, step="subtitle", done=0, total=0)
@@ -205,6 +242,21 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
         # cũng là bản đã cắt, đúng như bản gốc cho người dùng duyệt.
         subs = reup_dub.split_long_subtitles(subs)
 
+        cover_box, logo_boxes = None, []
+        if det_task is not None:
+            if not det_task.done():
+                _set(jid, step="clean", done=0, total=0)
+            det = await det_task
+            det_task = None
+            cover_box = det.get("box") if det.get("found") and cover_mode in reup_cover.COVER_MODES else None
+            logo_boxes = [o["box"] for o in (det.get("overlays") or [])] if want_logo else []
+            logger.info("[reup %s] phụ đề gốc: %s", jid,
+                        f"ô {cover_box} ({det.get('frames_with_text')}/{det.get('total')} khung)"
+                        if cover_box else f"không che ({det.get('reason') or 'không thấy'})")
+            if want_logo:
+                logger.info("[reup %s] logo: %s", jid,
+                            [(o.get("kind"), o.get("text"), o["box"]) for o in det.get("overlays") or []])
+
         # 3. Lồng tiếng theo logic ReupDouyin
         _set(jid, step="dub", done=0, total=len(subs))
         out = jdir / "reup.mp4"
@@ -212,10 +264,13 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
         def _prog(phase: str, done: int, total: int) -> None:
             _set(jid, step="dub" if phase in ("tts",) else phase, done=done, total=total)
 
+        engine, voice, fallback = pick_voice(opts, [s.get("text") for s in subs])
         r = await reup_dub.dub_video(
-            str(src), subs, str(opts.get("voice") or "vi-VN-HoaiMyNeural"), str(out),
+            str(src), subs, voice, str(out),
             mode=str(opts.get("mode") or "replace"), bg_volume=0.15,
-            burn=str(opts.get("burn") or "0") == "1", progress=_prog)
+            burn=str(opts.get("burn") or "0") == "1", progress=_prog,
+            engine=engine, fallback_voice=fallback,
+            cover_box=cover_box, cover_mode=cover_mode, logo_boxes=logo_boxes)
         if r.get("status") != "success":
             code = str(r.get("message") or "reup_failed")
             raise PublicSkillError(code if re.match(r"^[a-z_]{3,32}$", code) else "reup_failed",
@@ -235,6 +290,9 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
             "size": out.stat().st_size,
             "duration": f"{int(dur // 60)}:{int(dur % 60):02d}",
             "segments": int(r.get("segments") or 0),
+            "engine": str(r.get("engine") or "edge"),
+            "covered": bool(r.get("covered")),
+            "logos": int(r.get("logos") or 0),
         })
         try:
             src.unlink()               # video gốc không giao ra ngoài — dọn luôn
@@ -245,6 +303,9 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
     except Exception as e:      # noqa: BLE001
         logger.warning("[reup %s] hỏng: %s", jid, e, exc_info=True)
         _set(jid, status="error", code="reup_failed")
+    finally:
+        if det_task is not None and not det_task.done():
+            det_task.cancel()
 
 
 def _snapshot(jid: str) -> Dict[str, Any]:
@@ -288,8 +349,15 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
     o = opts or {}
     from tubecli.core.reup_dub import EDGE_VOICES
 
+    cover = str(o.get("cover") or "delogo")
     job_opts = {
-        "voice": o.get("voice") if o.get("voice") in EDGE_VOICES else "vi-VN-HoaiMyNeural",
+        # "" = người xem không chọn → giọng MẶC ĐỊNH của agent (pick_voice, lúc lồng)
+        "voice": o.get("voice") if o.get("voice") in EDGE_VOICES else "",
+        "_agent_id": str(o.get("_agent_id") or ""),
+        # Che phụ đề gốc: nội suy (delogo) mặc định — đúng logic user 28/9 hỏi
+        "cover": cover if cover in COVER_CHOICES else "delogo",
+        # Xoá logo/watermark cố định (qua 3 cửa lọc) — TẮT mặc định như ReupDouyin
+        "logo": "1" if str(o.get("logo") or "") == "1" else "0",
         "lang": o.get("lang") if o.get("lang") in LANGS else "",
         "burn": "1" if str(o.get("burn") or "") == "1" else "0",
         "mode": o.get("mode") if o.get("mode") in MODES else "replace",

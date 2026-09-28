@@ -15,6 +15,7 @@ except ImportError:
     _uuid7 = uuid.uuid4
 
 from tubecli.config import AGENTS_FILE, ensure_data_dirs
+from tubecli.core.agent_media import clean_media_fields
 
 
 # ── Tự đăng video: ép kiểu một chỗ ───────────────────────────
@@ -161,6 +162,12 @@ class Agent:
         # follow; "" = the Studio's defaults. Saved from the wizard's
         # Preset → Save, so there is one template system, not two.
         content_video_preset: str = "",
+        # Giọng đọc + bộ vẽ ảnh MẶC ĐỊNH của agent — lấp chỗ trống khi lượt chạy và
+        # mẫu Studio không chọn (xem core/agent_media.py). "" = tự động / Cài đặt chung.
+        tts_engine: str = "",
+        tts_voice: str = "",
+        image_provider: str = "",
+        image_model: str = "",
         # Auth & Clouds (Misc)
         auth: Dict = None, 
         cloud_api_keys: Dict = None,
@@ -264,6 +271,10 @@ class Agent:
         self.timezone = timezone
         self.language = language or "auto"
         self.content_video_preset = str(content_video_preset or "")
+        for _k, _v in clean_media_fields({"tts_engine": tts_engine, "tts_voice": tts_voice,
+                                          "image_provider": image_provider,
+                                          "image_model": image_model}).items():
+            setattr(self, _k, _v)
         self.auth = auth or {"google": [], "facebook": [], "tiktok": [], "x": [], "discord": [], "telegram": []}
         self.cloud_api_keys = cloud_api_keys or {
             "gemini": "", "claude": "", "openai": "", "deepseek": ""
@@ -343,6 +354,10 @@ class Agent:
             "timezone": getattr(self, "timezone", None),
             "language": getattr(self, "language", "auto"),
             "content_video_preset": getattr(self, "content_video_preset", "") or "",
+            "tts_engine": getattr(self, "tts_engine", "") or "",
+            "tts_voice": getattr(self, "tts_voice", "") or "",
+            "image_provider": getattr(self, "image_provider", "") or "",
+            "image_model": getattr(self, "image_model", "") or "",
             "auth": getattr(self, "auth", {}),
             "cloud_api_keys": getattr(self, "cloud_api_keys", {}),
             "enable_scraping": getattr(self, "enable_scraping", False),
@@ -465,7 +480,7 @@ class AgentManager:
         # trước bộ nhớ) để một client cũ hay một lời gọi API trực tiếp không cài
         # được publish_max_per_day=2.5 / publish_privacy="banana" vào dây chuyền
         # tự đăng — hỏng âm thầm tới tận lần khởi động sau.
-        updates = coerce_publish_fields(updates)
+        updates = clean_media_fields(coerce_publish_fields(updates))
         for k, v in updates.items():
             if hasattr(agent, k):
                 if k in ("routine", "persona") and isinstance(v, dict):

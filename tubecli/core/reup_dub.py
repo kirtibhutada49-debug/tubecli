@@ -119,6 +119,110 @@ async def _edge_tts(text: str, voice: str, out_mp3: Path) -> bool:
     return False
 
 
+# ── CapCut TTS (giọng mặc định của agent, user 28/9/2026) ────────────────────
+# capcut_tts là extension EXTERNAL → gọi loopback như dây chuyền content_video. Đọc theo
+# ĐỢT (/synthesize/batch: nhiều câu một lượt gọi, audio riêng từng câu) — 76 câu từng
+# câu một là 76 lượt mượn tài khoản, dễ chạm nhịp nghỉ của bể.
+CAPCUT_BATCH_TEXTS = 40         # trần sidecar là 60; chừa chỗ cho câu dài
+CAPCUT_BATCH_CHARS = 3000
+_CAPCUT_VOICE_RE = re.compile(r"^[A-Za-z0-9_.-]{2,64}$")
+
+
+def _loopback() -> str:
+    from tubecli.config import get_api_port
+
+    return f"http://127.0.0.1:{get_api_port()}"
+
+
+def _capcut_account() -> str:
+    """Email một tài khoản đang bật và không nghỉ trong bể của chủ; "" = không có."""
+    import time as _t
+
+    import requests
+
+    try:
+        r = requests.get(_loopback() + "/api/v1/capcut-tts/accounts", timeout=10)
+        if r.status_code >= 400:
+            return ""
+        now = _t.time()
+        for a in (r.json() or {}).get("accounts") or []:
+            if a.get("enabled") and float(a.get("rest_until") or 0) <= now:
+                return str(a.get("email") or "")
+    except Exception:      # noqa: BLE001
+        pass
+    return ""
+
+
+def _capcut_groups(texts: List[str]) -> List[List[int]]:
+    groups: List[List[int]] = []
+    cur: List[int] = []
+    chars = 0
+    for i, t in enumerate(texts):
+        if cur and (len(cur) >= CAPCUT_BATCH_TEXTS or chars + len(t) > CAPCUT_BATCH_CHARS):
+            groups.append(cur)
+            cur, chars = [], 0
+        cur.append(i)
+        chars += len(t)
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def _capcut_batch_blocking(email: str, texts: List[str], speaker: str) -> List[bytes]:
+    """Một đợt → audio từng câu theo đúng thứ tự (b"" = câu đó không có audio).
+    Hỏng cả đợt thì ném lỗi để bên gọi cho cả đợt lùi về Edge."""
+    import base64
+
+    import requests
+
+    body: Dict = {"email": email, "texts": texts}
+    if speaker:
+        body["speaker"] = speaker
+    timeout = int(min(900, max(180, 60 + sum(len(t) for t in texts) // 10))) + 30
+    r = requests.post(_loopback() + "/api/v1/capcut-tts/synthesize/batch", json=body, timeout=timeout)
+    if r.status_code != 200:
+        raise RuntimeError(f"capcut batch HTTP {r.status_code}: {(r.text or '')[:160]}")
+    by = {it.get("index"): it for it in ((r.json() or {}).get("items") or []) if isinstance(it, dict)}
+    out: List[bytes] = []
+    for i in range(len(texts)):
+        it = by.get(i) or {}
+        audio = b""
+        if it.get("ok"):
+            try:
+                audio = base64.b64decode(it.get("audio_b64") or "")
+            except (ValueError, TypeError):
+                audio = b""
+        out.append(audio if len(audio) >= 1000 else b"")
+    return out
+
+
+async def _capcut_all(subs: List[Dict], speaker: str, tmp: Path,
+                      say: Callable[[str, int, int], None]) -> Dict[int, Path]:
+    """{chỉ số câu: mp3} cho mọi câu CapCut đọc được; câu vắng mặt sẽ lùi về Edge."""
+    email = await asyncio.to_thread(_capcut_account)
+    if not email:
+        logger.info("capcut: không có tài khoản rảnh — cả bài lùi về Edge")
+        return {}
+    texts = [str(s["text"]).strip() for s in subs]
+    got: Dict[int, Path] = {}
+    done = 0
+    for group in _capcut_groups(texts):
+        try:
+            audios = await asyncio.to_thread(_capcut_batch_blocking, email,
+                                             [texts[i] for i in group], speaker)
+        except Exception as e:      # noqa: BLE001
+            logger.warning("capcut: đợt %d câu hỏng, lùi về Edge: %s", len(group), str(e)[:160])
+            audios = [b""] * len(group)
+        for i, audio in zip(group, audios):
+            if audio:
+                p = tmp / f"tts_{i:04d}.mp3"
+                p.write_bytes(audio)
+                got[i] = p
+        done += len(group)
+        say("tts", done, len(subs))
+    return got
+
+
 async def _fit_segment(ffmpeg: str, mp3: Path, wav: Path, slot: float) -> bool:
     dur = await media_duration(str(mp3), ffmpeg)
     af = None
@@ -185,11 +289,17 @@ def _ass_time(sec: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def build_ass(subs: List[Dict], w: int, h: int) -> str:
+def build_ass(subs: List[Dict], w: int, h: int, box: Optional[List[float]] = None) -> str:
     """Chữ ~5.5% cạnh ngắn (nhất quán dọc/ngang), lề ngang 5% (ngang 12%), cách đáy 6%,
-    tối đa 2 dòng: cue dài tự thu cỡ (sàn 14px) — y hệt ReupDouyin khi không dò box."""
+    tối đa 2 dòng: cue dài tự thu cỡ (sàn 14px) — y hệt ReupDouyin khi không dò box.
+
+    `box` = ô phụ đề GỐC vừa che (0..1): chữ mới LẤP đúng ô đó — cỡ 40 % chiều cao ô
+    (kẹp giữa cỡ thường và 8.5 % cạnh ngắn), căn giữa ô theo số dòng ước lượng."""
     S = min(w, h)
     font = max(16, int(round(S * 0.055)))
+    if box:
+        box_h = min(max(0.02, box[3] - box[1]) * h, h * 0.22)     # chặn ô cao bất thường
+        font = max(16, int(round(min(max(box_h * 0.40, S * 0.052), S * 0.085))))
     ml = int(round(w * (0.12 if w > h else 0.05)))
     mv = int(round(h * 0.06))
     outline = max(1, round(font * 0.09))
@@ -213,7 +323,14 @@ def build_ass(subs: List[Dict], w: int, h: int) -> str:
         # «{» mở khối lệnh ASS — chữ người dùng không được thành lệnh định dạng.
         text = raw.replace("{", "(").replace("}", ")").replace("\n", r"\N")
         fs = max(14, min(font, int((2 * usable) / (0.6 * max(1, len(raw))))))
-        pre = r"{\fs%d}" % fs if fs != font else ""
+        tags = r"\fs%d" % fs if fs != font else ""
+        if box:
+            # Neo TÂM khối chữ vào TÂM ô (\an5): libass tự canh dù 1 hay 2 dòng. Bản gốc ước
+            # số dòng bằng 0.6×cỡ chữ/ký tự — đo 28/9: câu 55 ký tự bị tưởng 2 dòng, thực tế
+            # 1 dòng, nên chữ rơi xuống dưới ô vừa che nửa dòng.
+            tags = r"\an5\pos(%d,%d)" % (int(round((box[0] + box[2]) / 2 * w)),
+                                        int(round((box[1] + box[3]) / 2 * h))) + tags
+        pre = "{" + tags + "}" if tags else ""
         ev.append(f"Dialogue: 0,{_ass_time(float(s['start']))},{_ass_time(float(s['end']))},"
                   f"Default,,{ml},{ml},{mv},,{pre}{text}")
     return head + "\n".join(ev) + "\n"
@@ -320,10 +437,22 @@ def _subtitles_filter_path(p: Path) -> str:
 async def dub_video(video_path: str, subtitles: List[Dict], voice: str,
                     output_path: str, mode: str = "replace", bg_volume: float = 0.15,
                     burn: bool = False,
-                    progress: Optional[Callable[[str, int, int], None]] = None) -> Dict:
-    """Trả {"status": "success", "output", "segments", "skipped"} hay {"status": "error", "message"}."""
+                    progress: Optional[Callable[[str, int, int], None]] = None,
+                    engine: str = "edge", fallback_voice: str = "vi-VN-HoaiMyNeural",
+                    cover_box: Optional[List[float]] = None, cover_mode: str = "delogo",
+                    logo_boxes: Optional[List[List[float]]] = None) -> Dict:
+    """Trả {"status": "success", "output", "segments", "skipped", "engine"} hay
+    {"status": "error", "message"}.
+
+    engine "capcut": `voice` là mã speaker CapCut ("" = giọng mặc định của CapCut); câu
+    nào CapCut không đọc được thì đọc bằng Edge `fallback_voice` — video vẫn đủ tiếng."""
     say = progress or (lambda phase, done, total: None)
-    if voice not in EDGE_VOICES:
+    if engine == "capcut":
+        if voice and not _CAPCUT_VOICE_RE.match(voice):
+            return {"status": "error", "message": "voice_not_allowed"}
+        if fallback_voice not in EDGE_VOICES:
+            return {"status": "error", "message": "voice_not_allowed"}
+    elif voice not in EDGE_VOICES:
         return {"status": "error", "message": "voice_not_allowed"}
     subs = [s for s in (subtitles or [])
             if isinstance(s, dict) and str(s.get("text") or "").strip()
@@ -348,21 +477,28 @@ async def dub_video(video_path: str, subtitles: List[Dict], voice: str,
         fit_sem = asyncio.Semaphore(FIT_CONCURRENCY)
         got: Dict[int, tuple] = {}
         done = 0
+        capcut: Dict[int, Path] = {}
+        if engine == "capcut":
+            capcut = await _capcut_all(subs, voice, tmp, say)
+        edge_voice = voice if engine != "capcut" else fallback_voice
 
         async def _one(i: int, s: Dict, count: bool = True) -> None:
             nonlocal done
             mp3 = tmp / f"tts_{i:04d}.mp3"
             wav = tmp / f"seg_{i:04d}.wav"
-            async with tts_sem:
-                ok = await _edge_tts(str(s["text"]).strip(), voice, mp3)
-                # giãn nhịp TRONG slot: tốc độ gọi tỉ lệ số luồng, không dồn cục
-                await asyncio.sleep(0.15 if ok else 0.2)
+            ok = i in capcut
+            if not ok:
+                async with tts_sem:
+                    ok = await _edge_tts(str(s["text"]).strip(), edge_voice, mp3)
+                    # giãn nhịp TRONG slot: tốc độ gọi tỉ lệ số luồng, không dồn cục
+                    await asyncio.sleep(0.15 if ok else 0.2)
             if ok:
                 async with fit_sem:
                     if await _fit_segment(ffmpeg, mp3, wav,
                                           float(s["end"]) - float(s["start"])):
                         got[i] = (float(s["start"]), wav)
-            if count:
+            # CapCut đã tự báo tiến độ theo đợt; lượt này chỉ còn ép khớp + vá bằng Edge
+            if count and engine != "capcut":
                 done += 1
                 say("tts", done, len(subs))
 
@@ -419,28 +555,54 @@ async def dub_video(video_path: str, subtitles: List[Dict], voice: str,
                 return {"status": "error", "message": "mux_failed"}
         say("mux", 1, 1)
 
-        # 5. Ghi phụ đề (tuỳ chọn) — bắt buộc re-encode video
+        # 5. Che phụ đề gốc + ghi phụ đề mới — MỘT lần encode (bản gốc encode hai lần)
         final = dubbed
-        if burn:
+        covered = False
+        logos_done = 0
+        if burn or cover_box or logo_boxes:
             say("burn", 0, 1)
             w, h = await video_size(str(dubbed), ffmpeg)
             if not w or not h:
                 w, h = 720, 1280
-            ass = tmp / "subs.ass"
-            ass.write_text(build_ass(subs, w, h), encoding="utf-8")
+            from tubecli.core.reup_cover import COVER_MODES, cover_graph, delogo_graph
+
+            graph, cur = [], "0:v"
+            if logo_boxes:
+                # logo/watermark: luôn NỘI SUY (bản gốc cũng vậy), trước lớp che phụ đề
+                graph.append(delogo_graph(logo_boxes, w, h, cur, "vlogo"))
+                cur = "vlogo"
+            if cover_box and cover_mode in COVER_MODES:
+                graph.append(cover_graph(cover_box, w, h, cover_mode, inp=cur, out="vcov"))
+                cur = "vcov"
+            if burn:
+                ass = tmp / "subs.ass"
+                # ô gốc đã che → chữ mới lấp đúng ô; không che thì đặt chỗ mặc định
+                ass.write_text(build_ass(subs, w, h, cover_box if cur == "vcov" else None),
+                               encoding="utf-8")
+                graph.append(f"[{cur}]{_subtitles_filter_path(ass)}[vsub]")
+                cur = "vsub"
             burned = tmp / "burned.mp4"
-            r = await _run_ff([ffmpeg, "-y", "-i", str(dubbed),
-                               "-vf", _subtitles_filter_path(ass),
-                               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                               "-c:a", "copy", str(burned)], enc_timeout)
-            if r.returncode == 0 and burned.exists():
-                final = burned
-            # burn hỏng thì vẫn giao bản đã lồng tiếng — đừng mất trắng cả job
+            if graph:
+                r = await _run_ff([ffmpeg, "-y", "-i", str(dubbed),
+                                   "-filter_complex", ";".join(graph),
+                                   "-map", f"[{cur}]", "-map", "0:a?",
+                                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                                   "-c:a", "copy", str(burned)], enc_timeout)
+                if r.returncode == 0 and burned.exists():
+                    final = burned
+                    covered = "vcov" in ";".join(graph)
+                    logos_done = len(logo_boxes or [])
+                else:
+                    logger.warning("che/ghi phụ đề hỏng: %s", (r.stderr or "")[-300:])
+            # hỏng thì vẫn giao bản đã lồng tiếng — đừng mất trắng cả job
             say("burn", 1, 1)
 
         shutil.move(str(final), str(out))
         return {"status": "success", "output": str(out),
-                "segments": len(entries), "skipped": skipped}
+                "segments": len(entries), "skipped": skipped,
+                # Giọng THẬT đã đọc: capcut chỉ khi CapCut đọc được ít nhất một câu
+                "engine": "capcut" if capcut else "edge", "capcut_lines": len(capcut),
+                "covered": covered, "logos": logos_done}
     except Exception as e:      # noqa: BLE001
         logger.warning("dub_video lỗi: %s", e, exc_info=True)
         return {"status": "error", "message": f"dub_failed: {str(e)[:120]}"}
