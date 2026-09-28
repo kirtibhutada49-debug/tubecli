@@ -95,6 +95,36 @@ async def put_public_agent(agent_id: str, req: PublicAgentSettings, request: Req
     return {"ok": True, "public": saved, "cloud_ready": public_agents.cloud_ready()}
 
 
+@router.post("/api/v1/public/catalog")
+async def public_catalog(request: Request):
+    """Danh mục giọng của skill (capcut.tts) — CHỈ cloud gọi, chữ ký miền «catalog» (chữ ký
+    của invoke không dùng được ở đây và ngược lại). Chỉ đọc, không tính lượt."""
+    body = await request.body()
+    if len(body) > MAX_INVOKE_BODY:
+        return JSONResponse(status_code=413, content={"ok": False, "code": "too_large"})
+    why = public_agents.verify_invoke(
+        request.headers.get("x-town-ts"),
+        request.headers.get("x-town-nonce"),
+        request.headers.get("x-town-sig"),
+        body,
+        domain="catalog",
+    )
+    if why:
+        status = 503 if why == "not_configured" else 401
+        return JSONResponse(status_code=status, content={"ok": False, "code": why})
+    try:
+        import json
+
+        payload = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_request"})
+    try:
+        data = await public_agents.catalog(payload)
+    except public_agents.PublicSkillError as e:
+        return JSONResponse(status_code=e.status, content={"ok": False, "code": e.code})
+    return {"ok": True, **data}
+
+
 @router.post("/api/v1/public/invoke")
 async def public_invoke(request: Request):
     body = await request.body()

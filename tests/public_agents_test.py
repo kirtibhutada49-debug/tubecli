@@ -148,6 +148,15 @@ n2 = "fedcba9876543210fedc"
 check("sai chữ ký → bad_signature", pa.verify_invoke(str(now), n2, "0" * 64, body, now=now) == "bad_signature")
 check("chữ ký sai KHÔNG đốt nonce (request thật sau đó vẫn qua)",
       pa.verify_invoke(str(now), n2, pa.sign(KEY, "invoke", str(now), body, n2), body, now=now) == "")
+nc1, nc2 = "c0" * 10, "c1" * 10
+check("chữ ký của invoke KHÔNG qua được route danh mục (miền «catalog»)",
+      pa.verify_invoke(str(now), nc1, pa.sign(KEY, "invoke", str(now), body, nc1), body, now=now,
+                       domain="catalog") == "bad_signature")
+check("chữ ký miền catalog qua route danh mục, nhưng KHÔNG qua invoke",
+      pa.verify_invoke(str(now), nc2, pa.sign(KEY, "catalog", str(now), body, nc2), body, now=now,
+                       domain="catalog") == ""
+      and pa.verify_invoke(str(now), "c2" * 10, pa.sign(KEY, "catalog", str(now), body, "c2" * 10), body,
+                           now=now) == "bad_signature")
 n3 = "aaaaaaaaaaaaaaaaaaaa"
 check("lệch giờ quá 5 phút → bad_signature",
       pa.verify_invoke(str(now - 301), n3, pa.sign(KEY, "invoke", str(now - 301), body, n3), body, now=now) == "bad_signature")

@@ -42,25 +42,63 @@ def _base() -> str:
     return f"http://127.0.0.1:{get_api_port()}"
 
 
-def _synth_blocking(text: str, voice: str, dest: str) -> str:
+def _pick_account() -> str:
+    """Mượn một tài khoản đang rảnh trong bể của chủ; không có cái nào → «tts_unavailable»."""
     import requests
 
-    base = _base()
-    # Mượn một tài khoản đang rảnh trong bể của chủ; không có cái nào → «tts_unavailable».
     try:
-        r = requests.get(base + "/api/v1/capcut-tts/accounts", timeout=10)
+        r = requests.get(_base() + "/api/v1/capcut-tts/accounts", timeout=10)
     except requests.RequestException:
         raise PublicSkillError("tts_unavailable", status=503)
     if r.status_code >= 400:
         raise PublicSkillError("tts_unavailable", status=503)
-    email = ""
     now = time.time()
     for a in (r.json() or {}).get("accounts") or []:
         if a.get("enabled") and float(a.get("rest_until") or 0) <= now:
-            email = str(a.get("email") or "")
-            break
-    if not email:
+            return str(a.get("email") or "")
+    raise PublicSkillError("tts_unavailable", status=503)
+
+
+CATALOG_TTL_SEC = 3600
+_LANG_RE = re.compile(r"^[a-z]{2,3}$")
+_catalog: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def catalog_blocking() -> Dict[str, Any]:
+    """{languages: [{code, count}], voices: [{id, name, lang}]} — đúng danh mục extension CapCut
+    TTS dựng theo vùng của tài khoản (/languages + /speakers; giọng đọc sai tiếng đã bị nó lọc).
+    Nhớ 1 giờ: danh mục gần như không đổi, còn mỗi lượt hỏi Node sidecar mất vài giây."""
+    import requests
+
+    if _catalog["data"] and time.time() - _catalog["at"] < CATALOG_TTL_SEC:
+        return _catalog["data"]
+    email = _pick_account()
+    try:
+        rl = requests.get(_base() + "/api/v1/capcut-tts/languages", params={"email": email}, timeout=60)
+        rs = requests.get(_base() + "/api/v1/capcut-tts/speakers", params={"email": email}, timeout=60)
+    except requests.RequestException:
         raise PublicSkillError("tts_unavailable", status=503)
+    if rl.status_code >= 400 or rs.status_code >= 400:
+        raise PublicSkillError("tts_unavailable", status=503)
+    voices = []
+    for s in rs.json() or []:
+        vid, lang = str(s.get("id") or ""), str(s.get("language") or "").lower()
+        if _VOICE_RE.match(vid) and _LANG_RE.match(lang):
+            voices.append({"id": vid, "name": str(s.get("name") or vid).strip()[:60], "lang": lang})
+    have = {v["lang"] for v in voices}
+    languages = [{"code": l["language"], "count": int(l.get("speakerCount") or 0)}
+                 for l in (rl.json() or {}).get("languages") or []
+                 if _LANG_RE.match(str(l.get("language") or "")) and l["language"] in have]
+    data = {"languages": languages, "voices": voices}
+    _catalog.update(at=time.time(), data=data)
+    return data
+
+
+def _synth_blocking(text: str, voice: str, dest: str) -> str:
+    import requests
+
+    base = _base()
+    email = _pick_account()
 
     body: Dict[str, Any] = {"email": email, "text": text}
     if voice:
@@ -99,6 +137,10 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
     voice = str((opts or {}).get("voice") or "").strip()
     if voice and not _VOICE_RE.match(voice):
         raise PublicSkillError("bad_input")
+    # Cloud chỉ kiểm DẠNG mã giọng (danh mục giờ lấy từ chính máy này) → máy kiểm giọng có
+    # thật trong danh mục; lạ → giọng mặc định của CapCut thay vì lỗi.
+    if voice and _catalog["data"] and voice not in {v["id"] for v in _catalog["data"]["voices"]}:
+        voice = ""
 
     from tubecli.core import public_share as ps
 

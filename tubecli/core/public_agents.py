@@ -414,9 +414,11 @@ class _Nonces:
 _nonces = _Nonces()
 
 
-def verify_invoke(ts: Any, nonce: Any, sig: Any, body: bytes, now: Optional[float] = None) -> str:
+def verify_invoke(ts: Any, nonce: Any, sig: Any, body: bytes, now: Optional[float] = None,
+                  domain: str = "invoke") -> str:
     """'' nếu hợp lệ, còn lại là mã lỗi. Nonce chỉ bị «tiêu» khi chữ ký ĐÚNG — không thì
-    ai cũng đốt được nonce của cloud bằng request rác."""
+    ai cũng đốt được nonce của cloud bằng request rác. `domain` tách chữ ký từng route
+    («invoke», «catalog»): chữ ký của route này không bao giờ dùng được cho route kia."""
     ident = _identity()
     if not ident:
         return "not_configured"
@@ -430,7 +432,7 @@ def verify_invoke(ts: Any, nonce: Any, sig: Any, body: bytes, now: Optional[floa
     nonce = str(nonce or "")
     if not _NONCE_RE.match(nonce):
         return "bad_signature"
-    want = sign(ident["key"], "invoke", str(at), body, nonce)
+    want = sign(ident["key"], domain, str(at), body, nonce)
     if not hmac.compare_digest(want, str(sig or "")):
         return "bad_signature"
     if not _nonces.use(nonce, now):
@@ -482,6 +484,51 @@ def usage(agent_id: str) -> Dict[str, int]:
 
 
 _gate = _Gate()
+
+
+async def catalog(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Danh mục giọng của skill capcut.tts — đọc thẳng extension CapCut TTS trên máy này
+    (ngôn ngữ + giọng theo vùng tài khoản, đã lọc giọng đọc sai tiếng) thay cho 6 giọng
+    cloud từng viết cứng (user 28/9: «có khá nhiều ngôn ngữ mà sao vẫn load 3 ngôn ngữ»).
+
+    Kèm `default` THEO AGENT (user 28/9: «ngôn ngữ của skill sẽ đi theo ngôn ngữ của agent»):
+    giọng mặc định của agent nếu là CapCut → ngôn ngữ đặt cho agent → rỗng (trang tự lấy
+    ngôn ngữ giao diện). Chỉ đọc: không qua cổng hạn mức, không báo Town, không gọi CapCut
+    đọc gì."""
+    if not isinstance(payload, dict):
+        raise PublicSkillError("bad_request", status=400)
+    h = str(payload.get("agent") or "")
+    skill_id = str(payload.get("skill") or "")
+    caller = str(payload.get("caller") or "")
+    if not _HASH_RE.match(h) or (caller and not _CALLER_RE.match(caller)):
+        raise PublicSkillError("bad_request", status=400)
+    entry = next((e for e in public_entries() if e["hash"] == h), None)
+    if not entry or not _visible_to(entry["settings"], caller):
+        raise PublicSkillError("agent_not_public", status=404)
+    if skill_id != "capcut.tts" or skill_id not in entry["settings"]["skills"]:
+        raise PublicSkillError("skill_not_allowed", status=403)
+
+    from tubecli.core import public_tts
+
+    data = await asyncio.to_thread(public_tts.catalog_blocking)
+    langs = {l["code"] for l in data["languages"]}
+    lang_of = {v["id"]: v["lang"] for v in data["voices"]}
+    default: Dict[str, str] = {}
+    try:
+        from tubecli.core.agent import agent_manager
+        from tubecli.core.agent_media import agent_voice
+
+        engine, voice = agent_voice(entry["agent_id"])
+        if engine == "capcut" and voice in lang_of:
+            default = {"voice": voice, "lang": lang_of[voice]}
+        else:
+            a = agent_manager.get(entry["agent_id"])
+            base = str(getattr(a, "language", "") or "").split("-")[0].lower()
+            if base in langs:
+                default = {"lang": base}
+    except Exception:      # noqa: BLE001 — không đọc được agent thì để trang tự chọn
+        default = {}
+    return {**data, "default": default}
 
 
 async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:

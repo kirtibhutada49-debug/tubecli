@@ -94,7 +94,9 @@ _AUTH_EXEMPT_EXACT = {"/login", "/api/v1/auth/login", "/api/v1/auth/status",
                       # Agent công khai: CHỈ cloud gọi, chìa khoá là chữ ký HMAC bằng town_key
                       # của máy + mốc giờ ±5 phút + nonce dùng một lần (core/public_agents.py).
                       # Route không có phiên nào để kiểm, và không chạy gì ngoài PUBLIC_SKILLS.
-                      "/api/v1/public/invoke"}
+                      "/api/v1/public/invoke",
+                      # danh mục giọng của skill — cùng khoá chữ ký, miền «catalog», chỉ đọc
+                      "/api/v1/public/catalog"}
 # /s/ = link chia sẻ công khai của File Manager (token ngẫu nhiên là chìa khoá;
 # route tự kiểm hạn dùng + file còn tồn tại). Người nhận không có tài khoản.
 _AUTH_EXEMPT_PREFIX = ("/webui/static/", "/static/", "/s/")
