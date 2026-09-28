@@ -297,7 +297,7 @@ def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any
 HIRE_UNITS = ("job", "minute")
 HIRE_PRICE_MAX = 500000          # = PRICE_MAX của cloud (lib/hire.js)
 HIRE_MINUTES_MAX = 60
-HIRE_PRESETS_MAX = 12
+HIRE_PRESETS_MAX = 60            # = HIRE_PRESETS_MAX của cloud (lib/hire.js) — từng là 12
 
 
 def _hire_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
