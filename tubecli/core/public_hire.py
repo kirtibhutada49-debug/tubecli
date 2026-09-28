@@ -186,6 +186,9 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not re.match(r"^[A-Za-z0-9_.-]{2,64}$", voice):
         voice = ""
     title = " ".join(str(payload.get("title") or "").split())[:120]
+    ratio = str(payload.get("ratio") or "")
+    if ratio not in ("16:9", "9:16"):
+        ratio = ""
     async with _lock:
         if code in _jobs:            # cloud gọi lại (mạng chớp) — không mở việc thứ hai
             return {"ok": True, "job": code}
@@ -193,7 +196,7 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
         job = {"code": code, "agent_id": entry["agent_id"], "preset": preset, "brief": brief,
                "unit": "minute" if payload.get("unit") == "minute" else "job",
                "minutes": minutes, "price": int(payload.get("price") or 0),
-               "voice": voice, "title": title,
+               "voice": voice, "title": title, "ratio": ratio,
                "status": "accepted", "task_id": "", "files": [], "paths": [],
                "seconds": 0, "at": time.time()}
         _jobs[code] = job
@@ -203,14 +206,36 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "job": code}
 
 
-def _merge_checkpoint(events: list) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    for ev in events or []:
-        d = ev.get("data") if isinstance(ev, dict) else None
-        cp = d.get("checkpoint") if isinstance(d, dict) else None
-        if isinstance(cp, dict):
-            out.update({k: v for k, v in cp.items() if v is not None})
-    return out
+def resume() -> None:
+    """Gọi lúc server dậy: nạp việc đang dở từ đĩa và bám tiếp task Codex của nó.
+
+    Không nối thì restart giữa lượt dựng = cloud thấy máy im 30 phút rồi hoàn tiền oan,
+    trong khi task vẫn dựng tiếp thành mồ côi. Việc đã bị cloud đóng (hoàn/huỷ từ trước)
+    tự thoát ở lượt báo cáo đầu của _run — cloud trả {closed:true} là đóng sổ, và vì
+    task_id đã có nên _run KHÔNG tạo task Codex thứ hai."""
+    try:
+        names = [f for f in os.listdir(_dir()) if f.endswith(".json")]
+    except OSError:
+        return
+    for name in names:
+        j = job_record(name[:-5])
+        if not j or j.get("status") not in ("accepted", "running") or j.get("_task"):
+            continue
+        j["_task"] = asyncio.create_task(_run(j["code"]))
+        logger.info("[hire] nối lại việc %s sau restart (task %s)", j["code"], j.get("task_id") or "?")
+
+
+def _checkpoint(task_id: str) -> Dict[str, Any]:
+    """Checkpoint đọc TRONG TIẾN TRÌNH (pipeline._read_checkpoint), KHÔNG qua HTTP.
+
+    Route /events cố tình lột sạch event checkpoint cho trình duyệt nhẹ
+    (codex/routes._public_events, user 15/9 «tốn ram») — nên vòng poll HTTP không bao
+    giờ thấy video_path: video 07:32 dựng XONG vẫn bị báo «no_files», khách được hoàn
+    oan (bắt 28/9 ở việc 34gm07symal9). public_hire sống cùng tiến trình với pipeline
+    nên đọc thẳng là đường ngắn nhất và không thể bị route công khai lọc mất."""
+    from tubecli.extensions.content_video.pipeline import _read_checkpoint
+
+    return _read_checkpoint(task_id) or {}
 
 
 def _latest_step(events: list) -> str:
@@ -249,19 +274,28 @@ async def _run(code: str) -> None:
             options["capcut_speaker"] = job["voice"]
         if job.get("title"):
             options["title"] = job["title"]
-        task = await asyncio.to_thread(
-            lambda: create_auto_task(job["agent_id"], options, created_by="hire",
-                                     origin={"agent_id": job["agent_id"], "hire": code},
-                                     job_label="Việc thuê từ Town"))
-        tid = str((task or {}).get("id") or "")
+        if job.get("ratio"):
+            # Khách chọn tỉ lệ trên form thuê → thắng cả tỉ lệ của mẫu. explicit vì
+            # 16:9 trùng mặc định pipeline — thiếu cờ này thì mẫu dọc vẫn thắng.
+            options["aspect_ratio"] = job["ratio"]
+            options["aspect_ratio_explicit"] = True
+        # resume() nối lại việc dở sau restart: task Codex ĐÃ có thì bám tiếp, không
+        # tạo task thứ hai (hai bộ dựng cho một đơn là ác mộng RAM lẫn tiền).
+        tid = str(job.get("task_id") or "")
         if not tid:
-            await _report(job, "failed", err="queue_failed")
-            job["status"] = "failed"
+            task = await asyncio.to_thread(
+                lambda: create_auto_task(job["agent_id"], options, created_by="hire",
+                                         origin={"agent_id": job["agent_id"], "hire": code},
+                                         job_label="Việc thuê từ Town"))
+            tid = str((task or {}).get("id") or "")
+            if not tid:
+                await _report(job, "failed", err="queue_failed")
+                job["status"] = "failed"
+                _save(job)
+                return
+            job["task_id"] = tid
+            job["status"] = "running"
             _save(job)
-            return
-        job["task_id"] = tid
-        job["status"] = "running"
-        _save(job)
 
         last_said, said_at = "", 0.0
         deadline = time.time() + 5.5 * 3600          # cloud tự hoàn sau 6 h — dừng trước nó
@@ -284,7 +318,7 @@ async def _run(code: str) -> None:
                 _save(job)
                 return
             if st in ("review", "completed", "done", "success"):
-                cp = _merge_checkpoint(evs)
+                cp = await asyncio.to_thread(_checkpoint, tid)
                 path = str(cp.get("video_path") or "")
                 if not path or not os.path.isfile(path):
                     await _report(job, "failed", err="no_files")

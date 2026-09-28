@@ -2047,6 +2047,14 @@ async def startup_event():
     except Exception as e:  # tính năng phụ: hỏng thì máy vẫn phải khởi động được
         print(f"[public-agents] start skipped: {e}")
 
+    # Nối lại VIỆC THUÊ đang dở (restart giữa lượt dựng): không nối thì cloud thấy máy
+    # im 30 phút rồi hoàn tiền oan, trong khi task Codex vẫn dựng tiếp thành mồ côi.
+    try:
+        from tubecli.core import public_hire
+        public_hire.resume()
+    except Exception as e:
+        print(f"[public-hire] resume skipped: {e}")
+
     # Pre-fetch Core update in background once on server startup
     import asyncio
     asyncio.create_task(check_for_updates())

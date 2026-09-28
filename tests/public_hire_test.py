@@ -116,13 +116,14 @@ check("mẫu agent không khai → template_missing", rc({**base, "job": "z" * 1
 check("mã việc sai dạng → bad_request", rc({**base, "job": "ABC!"}) == "bad_request")
 # Giọng + tiêu đề khách chọn (form thuê 28/9): hợp lệ thì lưu vào việc, sai dạng thì
 # BỎ LẶNG LẼ (video vẫn dựng bằng mặc định của mẫu, không từ chối việc).
-rc({**base, "job": "v" * 12, "voice": "BV075_streaming", "title": "  Pin   thể rắn  2027 "})
-check("receive: giọng + tiêu đề hợp lệ lưu vào việc, tiêu đề nén khoảng trắng",
-      ph._jobs["v" * 12]["voice"] == "BV075_streaming" and ph._jobs["v" * 12]["title"] == "Pin thể rắn 2027",
+rc({**base, "job": "v" * 12, "voice": "BV075_streaming", "title": "  Pin   thể rắn  2027 ", "ratio": "9:16"})
+check("receive: giọng + tiêu đề + tỉ lệ hợp lệ lưu vào việc, tiêu đề nén khoảng trắng",
+      ph._jobs["v" * 12]["voice"] == "BV075_streaming" and ph._jobs["v" * 12]["title"] == "Pin thể rắn 2027"
+      and ph._jobs["v" * 12]["ratio"] == "9:16",
       ph._jobs.get("v" * 12))
-rc({**base, "job": "w" * 12, "voice": "bậy bạ có dấu!", "title": ""})
-check("receive: giọng sai dạng → bỏ lặng lẽ, việc vẫn nhận",
-      ph._jobs["w" * 12]["voice"] == "" and ("w" * 12) in _ran)
+rc({**base, "job": "w" * 12, "voice": "bậy bạ có dấu!", "title": "", "ratio": "4:3"})
+check("receive: giọng/tỉ lệ sai dạng → bỏ lặng lẽ, việc vẫn nhận",
+      ph._jobs["w" * 12]["voice"] == "" and ph._jobs["w" * 12]["ratio"] == "" and ("w" * 12) in _ran)
 pa._load_all = lambda: {"A1": dict(only, hire_on=False, skills=["capcut.tts"])}
 check("hire tắt → hire_off", rc({**base, "job": "t" * 12}) == "hire_off")
 pa._load_all = lambda: {"A1": dict(only, name="Chi Cho Thue"),
@@ -166,10 +167,12 @@ state = {"phase": 0}
 
 
 def fake_http(path):
+    # Route /events THẬT lột sạch event checkpoint (codex/routes._public_events) —
+    # fake phải giống thật, không được nhét checkpoint vào đây (bug 28/9: video dựng
+    # xong vẫn «no_files» vì _run từng tin rằng /events mang video_path).
     if path.endswith("/events"):
         if state["phase"] >= 2:
-            return {"events": [{"data": {"step": "render", "status": "success"}},
-                               {"data": {"checkpoint": {"video_path": vid}}}]}
+            return {"events": [{"data": {"step": "render", "status": "success"}}]}
         return {"events": [{"data": {"step": "script", "status": "running"}}]}
     return {"task": {"status": ["running", "running", "review"][min(state["phase"], 2)]}}
 
@@ -179,6 +182,7 @@ class _FakePipeline(types.ModuleType):
 
 
 seen_opts = {}
+create_calls = {"n": 0}
 
 
 def setup_run(monkey_status=None):
@@ -186,6 +190,7 @@ def setup_run(monkey_status=None):
     ph._http_json = fake_http
 
     def _fake_create(aid, options=None, **k):
+        create_calls["n"] += 1
         seen_opts.clear()
         seen_opts.update(options or {})
         return {"id": "task-123"}
@@ -193,6 +198,8 @@ def setup_run(monkey_status=None):
     fake = types.SimpleNamespace(
         create_auto_task=_fake_create,
         media_seconds=lambda p: 95.0,
+        # Checkpoint đọc TRONG TIẾN TRÌNH (không phải /events) — chỉ có khi task đã xong.
+        _read_checkpoint=lambda tid: ({"video_path": vid} if state["phase"] >= 2 else {}),
         _base_url=lambda: "http://x")
     sys.modules["tubecli.extensions.content_video.pipeline"] = fake      # _run import từ đây
     return fake
@@ -220,10 +227,11 @@ ph._run = _orig_run
 _real_run_import = sys.modules.get("tubecli.extensions.content_video.pipeline")
 setup_run()
 state["phase"] = 0
-job = asyncio.run(run_fast("job1ok123456", voice="BV075_streaming", title="Pin thể rắn"))
-check("_run: giọng khách chọn → tts_engine capcut + capcut_speaker; tiêu đề vào options",
+job = asyncio.run(run_fast("job1ok123456", voice="BV075_streaming", title="Pin thể rắn", ratio="9:16"))
+check("_run: giọng khách chọn → tts_engine capcut + capcut_speaker; tiêu đề + tỉ lệ vào options",
       seen_opts.get("tts_engine") == "capcut" and seen_opts.get("capcut_speaker") == "BV075_streaming"
-      and seen_opts.get("title") == "Pin thể rắn", seen_opts)
+      and seen_opts.get("title") == "Pin thể rắn"
+      and seen_opts.get("aspect_ratio") == "9:16" and seen_opts.get("aspect_ratio_explicit") is True, seen_opts)
 ready = [r for r in reports if r["status"] == "ready"]
 check("_run: báo ready kèm file + SỐ GIÂY đo bằng ffprobe",
       job["status"] in ("reported", "delivered", "ready") and ready and ready[0]["seconds"] == 95
@@ -262,6 +270,42 @@ state["phase"] = 0
 job3 = asyncio.run(run_fast("job3closed00"))
 check("cloud đóng việc (khách huỷ) → máy ngừng theo, đóng sổ",
       job3["status"] == "closed" and len([r for r in reports if r["status"] == "ready"]) == 0)
+
+# ── resume: restart giữa lượt dựng — bám tiếp task cũ, KHÔNG tạo task thứ hai ─
+# Sổ trên đĩa còn cả việc «accepted» cũ của mục 4 (đời thật: đã bị cloud hoàn từ lâu)
+# — cloud trả closed ở lượt báo đầu là chúng phải đóng sổ êm, không tạo task nào.
+def _resume_report(code, body):
+    reports.append(dict(body))
+    if body["job"] != "jobresume001":
+        return {"closed": True, "status": "cancelled"}
+    return {"status": body.get("status")}
+
+
+ph._report_blocking = _resume_report
+ph._http_json = fake_http
+
+
+async def _test_resume():
+    state["phase"] = 5                     # codex «xong» ngay lượt poll đầu
+    reports.clear()
+    job = {"code": "jobresume001", "agent_id": "A1", "preset": "Mẫu A", "brief": "x",
+           "unit": "job", "minutes": 3, "price": 0, "status": "running",
+           "task_id": "task-123", "files": [], "paths": [], "seconds": 0, "at": 0}
+    ph._save(job)
+    ph._jobs.clear()
+    n0 = create_calls["n"]
+    ph.resume()
+    await asyncio.gather(*[j["_task"] for j in ph._jobs.values() if j.get("_task")])
+    return n0
+
+
+_n0 = asyncio.run(_test_resume())
+check("resume: nối việc running sau restart, KHÔNG tạo task thứ hai, việc cũ đóng êm",
+      create_calls["n"] == _n0
+      and ph._jobs["jobresume001"]["status"] in ("reported", "delivered", "ready")
+      and any(r["status"] == "ready" for r in reports)
+      and all(ph._jobs[c]["status"] == "closed" for c in ("abc123def456", "v" * 12, "w" * 12)),
+      {c: j.get("status") for c, j in ph._jobs.items()})
 
 # ── file_for ─────────────────────────────────────────────────────────────────
 f = ph.file_for("job1ok123456", 0)
