@@ -194,10 +194,10 @@ def verify_static(items: List[Dict], frames: List[bytes], ratio_thr: float = 0.9
 
 def pad_logo(b: List[float]) -> List[float]:
     """Ô logo vision trả thường KHÍT sát nét chữ: nội suy đúng ô đó để lại vệt viền chữ
-    (đo 28/9: nhãn góc 20 px còn đọc lờ mờ). Nới ~1.2 % ngang, 40 % chiều cao dọc (≥1.2 %)."""
-    py = max(0.012, (b[3] - b[1]) * 0.4)
-    return [round(max(0.0, b[0] - 0.012), 4), round(max(0.0, b[1] - py), 4),
-            round(min(1.0, b[2] + 0.012), 4), round(min(1.0, b[3] + py), 4)]
+    (đo 28/9: nhãn góc 20 px còn đọc lờ mờ). Nới CỐ ĐỊNH 1.2 % ngang, 1.5 % dọc — nới theo
+    tỷ lệ chiều cao ô (40 %) làm ô logo cao lấn xuống nửa dòng tiêu đề chương ngay dưới."""
+    return [round(max(0.0, b[0] - 0.012), 4), round(max(0.0, b[1] - 0.015), 4),
+            round(min(1.0, b[2] + 0.012), 4), round(min(1.0, b[3] + 0.015), 4)]
 
 
 def delogo_graph(boxes: List[List[float]], w: int, h: int, inp: str, out: str) -> str:
