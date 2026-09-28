@@ -117,4 +117,5 @@ def guess_lang(texts: Iterable[str]) -> str:
         return "zh"
     if re.search(r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", s.lower()):
         return "vi"
-    return "en"
+    # chỉ số / ký hiệu thì không nói được là tiếng gì
+    return "en" if re.search(r"[A-Za-z]{2,}", s) else ""

@@ -36,6 +36,8 @@ EXTRACT_TIMEOUT_SEC = 10 * 60
 LANGS = {"", "vi", "en", "ja", "zh"}
 MODES = {"replace", "mix"}
 COVER_CHOICES = {"delogo", "blur", "pixel", "fill", "none"}   # none = giữ phụ đề gốc
+LANG_NAMES = {"vi": "Vietnamese", "en": "English", "ja": "Japanese", "zh": "Simplified Chinese"}
+TRANSLATE_BATCH = 40
 _JOB_RE = re.compile(r"^[a-f0-9]{16}$")
 
 _jobs: Dict[str, Dict[str, Any]] = {}   # id -> {status, step, done, total, code, result, created, task}
@@ -97,7 +99,9 @@ async def _extract(file_path: str, translate_to: str, jid: str) -> list:
     def _post():
         return requests.post(_base() + "/api/v1/subtitle/extract", json={
             "file_path": file_path, "engine": "gemini",
-            "translate_to": translate_to or None,
+            # TÊN ngôn ngữ, không phải mã: prompt của extension ghép thẳng «Translate every
+            # sentence into {translate_to}» — «into vi» từng bị Gemini bỏ qua (28/9).
+            "translate_to": LANG_NAMES.get(translate_to, translate_to) or None,
         }, timeout=30)
 
     r = await asyncio.to_thread(_post)
@@ -134,6 +138,48 @@ async def _extract(file_path: str, translate_to: str, jid: str) -> list:
     raise PublicSkillError("timeout", status=504)
 
 
+def untranslated(subs: list, lang: str) -> list:
+    """Chỉ số các câu KHÔNG ở tiếng đích (đoán theo chữ). Câu không đoán được thì bỏ qua."""
+    from tubecli.core.agent_media import guess_lang
+
+    return [i for i, s in enumerate(subs) if guess_lang([s.get("text")]) not in ("", lang)]
+
+
+async def _ensure_translated(subs: list, lang: str) -> list:
+    """Gemini tách + dịch một bước đôi khi TRẢ NGUYÊN TIẾNG GỐC (28/9: link EP5zRRErMAM ra
+    15 câu chữ Trung phồn thể dù yêu cầu dịch sang Việt → giọng Việt đọc chữ Trung, 4/15
+    câu có tiếng). Quá 20 % câu sai tiếng → dịch bù đúng các câu đó bằng route dịch chữ
+    của subtitle_extractor. Dịch bù hỏng thì giữ nguyên — pick_voice chọn giọng theo tiếng
+    THẬT của phụ đề nên video vẫn có tiếng."""
+    import requests
+
+    if not lang or lang not in LANG_NAMES or not subs:
+        return subs
+    bad = untranslated(subs, lang)
+    if len(bad) <= len(subs) * 0.2:
+        return subs
+    out = [dict(s) for s in subs]
+    for k in range(0, len(bad), TRANSLATE_BATCH):
+        part = bad[k:k + TRANSLATE_BATCH]
+
+        def _post(part=part):
+            return requests.post(_base() + "/api/v1/subtitle/translate", json={
+                "subtitles": [{"text": out[i]["text"]} for i in part],
+                "target_language": LANG_NAMES[lang]}, timeout=120)
+        try:
+            r = await asyncio.to_thread(_post)
+            got = (r.json() or {}).get("subtitles") or [] if r.status_code == 200 else []
+        except Exception as e:      # noqa: BLE001
+            logger.warning("dịch bù hỏng: %s", e)
+            got = []
+        for i, g in zip(part, got):
+            t = str((g or {}).get("text") or "").strip()
+            if t:
+                out[i]["text"] = t
+    logger.info("dịch bù %d/%d câu sai tiếng → còn %d", len(bad), len(subs), len(untranslated(out, lang)))
+    return out
+
+
 def pick_voice(opts: Dict[str, Any], texts: list) -> tuple:
     """(engine, voice, fallback_edge_voice) cho một job.
 
@@ -143,7 +189,8 @@ def pick_voice(opts: Dict[str, Any], texts: list) -> tuple:
     đặt → Edge theo tiếng của phụ đề."""
     from tubecli.core import agent_media as am
 
-    lang = str(opts.get("lang") or "") or am.guess_lang(texts) or "vi"
+    # Tiếng THẬT của phụ đề trước (dịch có thể đã hỏng), rồi mới tới tiếng người xem chọn
+    lang = am.guess_lang(texts) or str(opts.get("lang") or "") or "vi"
     fallback = am.EDGE_BY_LANG.get(lang, "vi-VN-HoaiMyNeural")
     chosen = str(opts.get("voice") or "")
     if chosen:
@@ -238,6 +285,7 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
                 subs = again
         if collapsed_count(subs):
             subs = rescue_collapsed(subs, await reup_dub.media_duration(str(src)))
+        subs = await _ensure_translated(subs, str(opts.get("lang") or ""))
         # Bước 3.5 của ReupDouyin: cắt dòng dài trước khi lồng — phụ đề giao ra (.srt)
         # cũng là bản đã cắt, đúng như bản gốc cho người dùng duyệt.
         subs = reup_dub.split_long_subtitles(subs)

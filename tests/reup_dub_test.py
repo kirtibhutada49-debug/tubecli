@@ -149,8 +149,16 @@ try:
     check("agent chưa đặt + giữ tiếng gốc → Edge theo tiếng đoán từ phụ đề",
           pr.pick_voice({"voice": "", "lang": "", "_agent_id": "Z"}, ["我们今天聊聊人工智能的发展"])[:2]
           == ("edge", "zh-CN-XiaoxiaoNeural"))
+    check("phụ đề THẬT còn tiếng Trung (dịch hỏng) → giọng theo tiếng thật, không để giọng Việt câm",
+          pr.pick_voice({"voice": "", "lang": "vi", "_agent_id": "A"}, ["如果把三國做成一副會動的連環畫會是什麼樣子"])[:2]
+          == ("edge", "zh-CN-XiaoxiaoNeural"))
 finally:
     am._agent = am_real
+
+check("đếm câu sai tiếng đích (dịch một bước bị Gemini bỏ qua)",
+      pr.untranslated([{"text": "大家好，我是柚子Lab。"}, {"text": "Chào mọi người, tôi là Yuzu Lab."},
+                       {"text": "123"}], "vi") == [0])
+check("tên ngôn ngữ đầy đủ gửi cho bộ dịch", pr.LANG_NAMES["vi"] == "Vietnamese")
 
 print(f"\n{passed} pass, {failed} fail")
 sys.exit(1 if failed else 0)
