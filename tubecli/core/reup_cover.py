@@ -144,7 +144,7 @@ def cluster_overlays(per_frame: List[List[Dict]], total: int, min_ratio: float =
              "text": c["text"], "kind": c["kind"]} for c in clusters if len(c["frames"]) >= need]
 
 
-TOP_BAND = 0.22      # logo chỉ được nằm trong dải 22 % trên cùng…
+TOP_BAND = 0.15      # logo chỉ được nằm trong dải 15 % trên cùng (22 % từng ăn cả tiêu đề chương ngay dưới logo)…
 CORNER_X = 0.4       # …và lệch hẳn về một góc: tâm ≤ 40 % (trái) hoặc ≥ 60 % (phải)
 
 
