@@ -77,6 +77,18 @@ function attachBlocks(kind, attached) {
 const ATTACH_REFUSAL_VI = 'Khung nay dang XEM GHEP phien cua agent — chi xem, khong dieu khien. '
     + 'Muon tu thao tac thi dung phien do roi mo lai browser.';
 
+// Phím tắt chạm clipboard của HỆ ĐIỀU HÀNH máy chủ: Ctrl/Meta + C/V/X/Insert, Shift + Insert/
+// Delete, phím Copy/Paste/Cut. Hàm thuần — test gọi thẳng.
+function isClipboardShortcut(key) {
+    const parts = String(key || '').split('+').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (!parts.length) return false;
+    const base = parts[parts.length - 1];
+    const mods = new Set(parts.slice(0, -1));
+    if (['copy', 'paste', 'cut'].includes(base)) return true;
+    if ((mods.has('control') || mods.has('meta') || mods.has('controlormeta')) && ['c', 'v', 'x', 'insert'].includes(base)) return true;
+    return mods.has('shift') && ['insert', 'delete'].includes(base);
+}
+
 function log(msg) {
     console.log(JSON.stringify({ type: 'log', message: msg, time: new Date().toISOString() }));
     if (typeof broadcast === 'function') {
@@ -85,6 +97,9 @@ function log(msg) {
 }
 
 const clients = new Set();
+// Hàng lệnh WS chung cho mọi người xem (một trang, một con chuột) — xem ws.on('message').
+let wsQueue = Promise.resolve();
+const WS_NO_WAIT = new Set(['navigate', 'new_tab', 'nav']);
 // Mốc lúc người xem CUỐI CÙNG rời đi (ms), null khi đang có người xem. /status phát
 // ra để routes.py (free-memory) nhận ra live view BỎ HOANG — tab canvas đã đóng mà
 // pagehide không kịp gọi /preview/stop — và phân biệt nó với live view đang có
@@ -524,8 +539,8 @@ process.on('uncaughtException', (err) => {
                 } else if (action === 'up') {
                     await page.mouse.up();
                 }
-                await triggerImmediateFrame();
-            } 
+                kickFrame();
+            }
             else if (msg.type === 'scroll') {
                 const { deltaX, deltaY } = msg;
                 // page.mouse.wheel gửi wheel event thật tại vị trí con trỏ →
@@ -533,8 +548,8 @@ process.on('uncaughtException', (err) => {
                 await page.mouse.wheel(deltaX, deltaY).catch(async () => {
                     await page.evaluate(({ deltaX, deltaY }) => window.scrollBy(deltaX, deltaY), { deltaX, deltaY });
                 });
-                await triggerImmediateFrame();
-            } 
+                kickFrame();
+            }
             else if (msg.type === 'keyboard') {
                 const { action, text, key } = msg;
                 if (action === 'type') {
@@ -546,17 +561,30 @@ process.on('uncaughtException', (err) => {
                     // debouncing some sites apply to rapid keydowns.
                     await page.keyboard.insertText(text || '');
                 } else if (action === 'press') {
+                    // Phiên người lạ: KHÔNG bấm phím tắt clipboard trên máy chủ (chép/dán đi qua
+                    // clipboard của người xem — get_selection + insert). Chặn ở đây dù client
+                    // đã không gửi: không để một client tự viết đọc/ghi clipboard của máy.
+                    if (isolateMode && isClipboardShortcut(key)) return;
                     await page.keyboard.press(key);
                 }
-                await triggerImmediateFrame();
+                kickFrame();
             }
             else if (msg.type === 'get_selection') {
                 // Answering a copy from the remote page. Read it after the
                 // mouse is released and hold it client-side, because a copy
                 // event has to produce its data synchronously.
-                const text = await page.evaluate(
-                    () => (window.getSelection() || '').toString()
-                ).catch(() => '');
+                // Chữ bôi đen trong ô nhập/textarea KHÔNG nằm trong window.getSelection()
+                // (Chrome trả rỗng) — đọc selectionStart/End của ô đang focus. Ô mật khẩu
+                // không bao giờ được đọc (hồ sơ có thể tự điền mật khẩu đã lưu).
+                const text = await page.evaluate(() => {
+                    const el = document.activeElement;
+                    const typed = el && (el.tagName === 'TEXTAREA'
+                        || (el.tagName === 'INPUT' && /^(text|search|url|tel|email|number|)$/i.test(el.getAttribute('type') || '')));
+                    if (typed && typeof el.selectionStart === 'number' && el.selectionEnd > el.selectionStart) {
+                        return String(el.value || '').substring(el.selectionStart, el.selectionEnd);
+                    }
+                    return (window.getSelection() || '').toString();
+                }).then((s) => String(s || '').slice(0, 100000)).catch(() => '');
                 // broadcast, not ws.send: handleWSMessage receives only the
                 // message — there is no socket in scope here, which is why this
                 // logged "ws is not defined" on every mouse release.
@@ -624,6 +652,19 @@ process.on('uncaughtException', (err) => {
 
     let isStreaming = false;
     let streamInterval = null;
+
+    // Chuột/phím/cuộn KHÔNG chờ chụp khung: lệnh WS giờ chạy theo hàng (xem wsQueue), chờ
+    // chụp ở mỗi lần di chuột thì kéo bôi đen trễ dồn. Lần chụp đang chạy thì chỉ hẹn thêm
+    // MỘT lần sau nó — không chồng hàng chục lần chụp khi kéo chuột.
+    let frameBusy = false, frameAgain = false;
+    function kickFrame() {
+        if (frameBusy) { frameAgain = true; return; }
+        frameBusy = true;
+        triggerImmediateFrame().finally(() => {
+            frameBusy = false;
+            if (frameAgain) { frameAgain = false; kickFrame(); }
+        });
+    }
 
     async function triggerImmediateFrame() {
         if (clients.size === 0 || !page) return;
@@ -988,13 +1029,23 @@ process.on('uncaughtException', (err) => {
             triggerImmediateFrame().catch(()=>{});
         }
 
-        ws.on('message', async (message) => {
+        // Lệnh chạy ĐÚNG THỨ TỰ nhận. Trước chạy song song: «hỏi chữ bôi đen» chen trước các
+        // phím Shift+← chưa bấm xong → Ctrl+C chép vùng cũ; nhấn/kéo/thả chuột và gõ nhanh
+        // cũng có thể đảo thứ tự (28/9). Điều hướng không giữ hàng (trang chậm vẫn bấm được),
+        // mỗi lệnh có trần thời gian để một lệnh treo không khoá cả hàng.
+        ws.on('message', (message) => {
+            let msg;
             try {
-                const msg = JSON.parse(message.toString('utf8'));
-                await handleWSMessage(msg);
+                msg = JSON.parse(message.toString('utf8'));
             } catch (e) {
                 log(`Error parsing WS data: ${e.message}`);
+                return;
             }
+            wsQueue = wsQueue.then(() => {
+                const p = handleWSMessage(msg);
+                if (msg && WS_NO_WAIT.has(msg.type)) return undefined;
+                return Promise.race([p, new Promise((r) => setTimeout(r, 8000))]);
+            }).catch((e) => log(`WS action failed: ${e && e.message}`));
         });
 
         ws.on('close', () => {

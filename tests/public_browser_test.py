@@ -5,6 +5,7 @@ Chạy: python tests/public_browser_test.py — không mạng, không mở trìn
 khách ghi vào thư mục tạm (không đụng guest_tokens.json của máy)."""
 import asyncio
 import io
+import json
 import os
 import re
 import sys
@@ -211,16 +212,27 @@ check("lệnh lạ → bad_input", call('{"action":"format_c"}', "aaaa1111") == 
 
 
 async def expiry():
+    import concurrent.futures
+    import time as _t
+
+    loop = asyncio.get_running_loop()
+    # Máy thật: hàng đợi luồng hay bận nên việc tắt preview phải XẾP HÀNG — đúng lúc đó lệnh
+    # tự huỷ (bản cũ) gỡ nó khỏi hàng và nó không bao giờ chạy. Một luồng + chiếm sẵn = tái hiện.
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
     s = await pb.resolve('{"action":"start"}', {"_agent_id": "A2", "_caller": "cccc3333",
                                                 "_settings": {**ST, "browser_minutes": 5}})
     pb._sessions["A2"]["task"].cancel()
     pb._sessions["A2"]["task"] = asyncio.create_task(pb._expire_later("A2", s["session"], 0.05))
-    await asyncio.sleep(1.5)
+    loop.run_in_executor(None, _t.sleep, 1.6)
+    await asyncio.sleep(3.0)
     return s
 
 
 s = asyncio.run(expiry())
 check("hết giờ → tự thu token + tắt browser", "A2" not in pb._sessions and auth.guest_scope_for(s["token"]) is None)
+# 28/9: _end tự huỷ chính task hẹn giờ → lệnh huỷ ập vào await tắt preview → trình duyệt chạy
+# mãi, giữ hồ sơ. Kiểm ĐÚNG việc tắt đã xảy ra, không chỉ việc thu token.
+check("hết giờ → preview THẬT SỰ được tắt (không mồ côi giữ hồ sơ)", ("shared", s["port"]) in stopped, stopped)
 check("hạn cookie khách = hạn token", auth.guest_token_exp(r1["token"]) == 0)
 
 # ── Hai lỗi chỉ lộ khi chạy thật (e2e 28/9) ──────────────────────────────────
@@ -313,6 +325,35 @@ _e4 = br._node_upload_error(types.SimpleNamespace(status_code=400, text="File ch
 _e5 = br._node_upload_error(types.SimpleNamespace(status_code=500, text="boom"))
 check("chưa mở hộp chọn file → 409 (502 bị Cloudflare thay bằng trang HTML không CORS)",
       _e4.status_code == 409 and _e5.status_code == 502)
+
+# ── Chép/dán của người lạ đi clipboard CỦA HỌ, không chạm clipboard máy chủ (user 28/9) ──
+_CLIP = ["Control+c", "Control+v", "Control+x", "Control+Insert", "Shift+Insert", "Shift+Delete",
+         "Meta+v", "ControlOrMeta+c", "Control+Shift+v", "Paste", "Copy", "Cut", "control + V"]
+_OK_KEYS = ["Control+a", "Shift+ArrowLeft", "Enter", "c", "Delete", "Control+z", "Alt+ArrowLeft", "Insert"]
+check("bộ lọc WS: phím tắt clipboard của khách công khai bị bỏ",
+      all(not br._public_ws_message_ok(json.dumps({"type": "keyboard", "action": "press", "key": k})) for k in _CLIP))
+check("bộ lọc WS: Ctrl+A, Shift+mũi tên, Ctrl+Z… vẫn qua",
+      all(br._public_ws_message_ok(json.dumps({"type": "keyboard", "action": "press", "key": k})) for k in _OK_KEYS))
+check("bộ lọc WS: dán bằng insert (chữ từ clipboard NGƯỜI XEM) vẫn qua",
+      br._public_ws_message_ok(json.dumps({"type": "keyboard", "action": "insert", "text": "xin chào"})))
+_ps = open(os.path.join(_root, "tubecli", "extensions", "browser", "preview_server.cjs"), encoding="utf-8").read()
+_fn = _ps[_ps.index("function isClipboardShortcut"):]
+_fn = _fn[:_fn.index("\n}\n") + 3]
+_js = _fn + "\nconsole.log(JSON.stringify([%s, %s]))" % (
+    json.dumps(_CLIP) + ".map(isClipboardShortcut)", json.dumps(_OK_KEYS) + ".map(isClipboardShortcut)")
+_r = __import__("subprocess").run(["node", "-e", _js], capture_output=True, text=True, timeout=30)
+try:
+    _clip_js, _ok_js = json.loads(_r.stdout)
+except ValueError:
+    _clip_js, _ok_js = [], [True]
+check("preview_server: isClipboardShortcut cùng luật với bộ lọc Python",
+      all(_clip_js) and len(_clip_js) == len(_CLIP) and not any(_ok_js), _r.stdout or _r.stderr)
+check("preview_server: phiên cô lập bỏ phím tắt clipboard trước khi bấm",
+      "if (isolateMode && isClipboardShortcut(key)) return;" in _ps)
+_gs = _ps[_ps.index("msg.type === 'get_selection'"):]
+_gs = _gs[:_gs.index("broadcast({ type: 'selection'")]
+check("get_selection đọc cả ô nhập/textarea nhưng KHÔNG đọc ô mật khẩu",
+      "selectionStart" in _gs and "password" not in _gs and "text|search|url|tel|email|number|" in _gs)
 
 shutil.rmtree(_tmp, ignore_errors=True)
 print(f"\n{passed} pass, {failed} fail")

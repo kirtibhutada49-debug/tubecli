@@ -49,16 +49,21 @@ async def _end(agent_id: str, sid: str) -> None:
     if not s or s["sid"] != sid:
         return
     _sessions.pop(agent_id, None)
-    try:
-        s["task"].cancel()
-    except Exception:      # noqa: BLE001
-        pass
+    # KHÔNG huỷ task hẹn giờ khi chính nó đang gọi _end (hết giờ): tự cancel mình thì lệnh
+    # huỷ ập vào ngay ở await tắt preview bên dưới → token đã thu nhưng trình duyệt chạy mãi,
+    # giữ hồ sơ, người sau chỉ gặp «bận» (lộ ra 28/9 — phiên hết giờ để lại preview mồ côi).
+    t = s.get("task")
+    if t is not None and t is not asyncio.current_task():
+        t.cancel()
     from tubecli.core import auth
 
     auth.revoke_guest_tokens_for_workspace(s["workspace"])
     try:
         from tubecli.extensions.browser.routes import stop_public_preview
-        await asyncio.to_thread(stop_public_preview, s["profile"], s["port"])
+        # shield: lượt gọi bị huỷ giữa chừng (invoke hết hạn…) thì việc tắt vẫn chạy trọn.
+        await asyncio.shield(asyncio.to_thread(stop_public_preview, s["profile"], s["port"]))
+    except asyncio.CancelledError:
+        raise
     except Exception as e:      # noqa: BLE001
         logger.warning("[browser.remote] tắt preview hỏng: %s", e)
     logger.info("[browser.remote] phiên %s của agent %s kết thúc", sid, agent_id)

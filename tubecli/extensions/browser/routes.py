@@ -3499,7 +3499,23 @@ def _public_ws_message_ok(text: str) -> bool:
         return False
     if t in ("navigate", "new_tab"):
         return _public_url_ok(msg.get("url"))
+    if t == "keyboard" and msg.get("action") == "press" and _is_clipboard_key(msg.get("key")):
+        return False   # chép/dán của người lạ đi clipboard CỦA HỌ, không chạm clipboard máy chủ
     return True
+
+
+def _is_clipboard_key(key) -> bool:
+    """Ctrl/Meta + C/V/X/Insert, Shift + Insert/Delete, phím Copy/Paste/Cut — cùng luật với
+    isClipboardShortcut trong preview_server.cjs (lớp chặn thứ hai)."""
+    parts = [p.strip().lower() for p in str(key or "").split("+") if p.strip()]
+    if not parts:
+        return False
+    base, mods = parts[-1], set(parts[:-1])
+    if base in ("copy", "paste", "cut"):
+        return True
+    if mods & {"control", "meta", "controlormeta"} and base in ("c", "v", "x", "insert"):
+        return True
+    return "shift" in mods and base in ("insert", "delete")
 
 
 @router.websocket("/preview/ws/{port}")
