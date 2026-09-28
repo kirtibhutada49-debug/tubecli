@@ -105,16 +105,17 @@ def _atempo_chain(factor: float) -> str:
 async def _edge_tts(text: str, voice: str, out_mp3: Path) -> bool:
     import edge_tts
 
-    # «No audio was received» là lỗi chập chờn quen của Edge-TTS (đo 28/9: 1/3 câu
-    # dính ngay trong test đầu) — 3 lần với backoff mới đáng gọi là retry.
-    for attempt in range(3):
+    # «No audio was received» là lỗi chập chờn quen của Edge-TTS (đo 28/9 buổi trưa:
+    # ~50% lượt dính) — 4 lần, giãn 2/4/6 s như edge_engine.py bên ReupDouyin.
+    for attempt in range(4):
+        if attempt:
+            await asyncio.sleep(2 * attempt)
         try:
             await edge_tts.Communicate(text, voice).save(str(out_mp3))
             if out_mp3.exists() and out_mp3.stat().st_size > 200:
                 return True
         except Exception as e:      # noqa: BLE001
-            logger.warning("edge-tts lỗi (lần %d): %s", attempt + 1, str(e)[:120])
-        await asyncio.sleep(0.8 * (attempt + 1))
+            logger.debug("edge-tts lỗi (lần %d): %s", attempt + 1, str(e)[:120])
     return False
 
 
@@ -348,7 +349,7 @@ async def dub_video(video_path: str, subtitles: List[Dict], voice: str,
         got: Dict[int, tuple] = {}
         done = 0
 
-        async def _one(i: int, s: Dict) -> None:
+        async def _one(i: int, s: Dict, count: bool = True) -> None:
             nonlocal done
             mp3 = tmp / f"tts_{i:04d}.mp3"
             wav = tmp / f"seg_{i:04d}.wav"
@@ -361,10 +362,17 @@ async def dub_video(video_path: str, subtitles: List[Dict], voice: str,
                     if await _fit_segment(ffmpeg, mp3, wav,
                                           float(s["end"]) - float(s["start"])):
                         got[i] = (float(s["start"]), wav)
-            done += 1
-            say("tts", done, len(subs))
+            if count:
+                done += 1
+                say("tts", done, len(subs))
 
         await asyncio.gather(*(_one(i, s) for i, s in enumerate(subs)))
+        # Lượt vét: Edge chập chờn theo đợt — câu hỏng cả 4 lần thường đọc được khi cả
+        # lượt đã qua. Hỏng quá nhiều = dịch vụ đang sập, vét chỉ tốn thêm thời gian.
+        miss = [i for i in range(len(subs)) if i not in got]
+        if miss and len(miss) <= max(3, len(subs) // 4):
+            for i in miss:
+                await _one(i, subs[i], count=False)
         entries: List[tuple] = [got[i] for i in sorted(got)]
         skipped = len(subs) - len(entries)
         if not entries:

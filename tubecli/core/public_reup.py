@@ -133,6 +133,40 @@ async def _extract(file_path: str, translate_to: str, jid: str) -> list:
     raise PublicSkillError("timeout", status=504)
 
 
+_COLLAPSED = 0.05    # cue ngắn hơn chừng này = bị kẹp về cuối đoạn, không phải câu thật
+
+
+def collapsed_count(subs: list) -> int:
+    return sum(1 for s in subs if float(s["end"]) - float(s["start"]) < _COLLAPSED)
+
+
+def rescue_collapsed(subs: list, video_dur: float) -> list:
+    """Còn cue dồn cục ở ĐUÔI sau khi đã tách lại: coi mốc bị giãn đều (trôi tuyến tính),
+    co các cue tốt lại rồi xếp các cue dồn cục nối sau theo tốc độ đọc của chính video
+    (ký tự/giây trung vị). Dồn cục ở GIỮA (ranh giới đoạn 175 s) thì để nguyên — không
+    đoán được thời gian thật, lồng tiếng tự bỏ các cue đó như trước."""
+    subs = sorted(subs, key=lambda s: float(s["start"]))
+    good = [s for s in subs if float(s["end"]) - float(s["start"]) >= _COLLAPSED]
+    tail = subs[len(good):] if subs[:len(good)] == good else []
+    if not good or not tail or video_dur <= 0:
+        return subs
+    rates = sorted(len(str(s["text"])) / (float(s["end"]) - float(s["start"])) for s in good)
+    cps = rates[len(rates) // 2] or 15.0
+    need = sum(len(str(s["text"])) for s in tail) / cps
+    last = float(good[-1]["end"])
+    f = max(0.6, min(1.0, (video_dur - need) / last)) if last > 0 else 1.0
+    out = [{**s, "start": round(float(s["start"]) * f, 3), "end": round(float(s["end"]) * f, 3)}
+           for s in good]
+    t = last * f
+    room = max(0.0, video_dur - t)
+    k = room / need if need > 0 else 1.0
+    for s in tail:
+        d = len(str(s["text"])) / cps * min(1.0, k)
+        out.append({**s, "start": round(t, 3), "end": round(min(video_dur, t + d), 3)})
+        t += d
+    return out
+
+
 async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
     from tubecli.core import public_share as ps
     from tubecli.core import reup_dub
@@ -157,6 +191,16 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
         # 2. Tách phụ đề (+ dịch nếu chọn)
         _set(jid, step="subtitle", done=0, total=0)
         subs = await _extract(str(src), str(opts.get("lang") or ""), jid)
+        # Gemini đôi khi cho mốc TRÔI dài hơn đoạn audio; subtitle_extractor kẹp về cuối
+        # đoạn nên các câu cuối dồn cục, dài 0 s, và bị bỏ khi lồng (demo 28/9: 6 câu
+        # cuối video 2:28). Mô hình không tất định — tách lại một lần thường là khỏi.
+        if collapsed_count(subs) >= 2:
+            _set(jid, step="subtitle", done=0, total=0)
+            again = await _extract(str(src), str(opts.get("lang") or ""), jid)
+            if collapsed_count(again) < collapsed_count(subs):
+                subs = again
+        if collapsed_count(subs):
+            subs = rescue_collapsed(subs, await reup_dub.media_duration(str(src)))
         # Bước 3.5 của ReupDouyin: cắt dòng dài trước khi lồng — phụ đề giao ra (.srt)
         # cũng là bản đã cắt, đúng như bản gốc cho người dùng duyệt.
         subs = reup_dub.split_long_subtitles(subs)

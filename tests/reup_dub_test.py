@@ -58,5 +58,24 @@ m = rd._SIZE_RE.search("Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x3163
                        "bt470bg/unknown/unknown, progressive), 576x768 [SAR 1:1 DAR 3:4], 161 kb/s")
 check("đọc khổ video từ stderr ffmpeg (không nhầm mã codec 0x3163…)", m and m.groups() == ("576", "768"))
 
+# ── Mốc Gemini trôi: cue dồn cục ở đuôi (public_reup) ────────────────────────
+from tubecli.core import public_reup as pr  # noqa: E402
+
+drift = [{"start": i * 10.0, "end": i * 10.0 + 9, "text": "x" * 90} for i in range(14)]  # tới 139 s
+drift[-1]["end"] = 148.33
+drift += [{"start": 148.33, "end": 148.33, "text": "y" * 45} for _ in range(3)]
+check("đếm cue dồn cục", pr.collapsed_count(drift) == 3)
+fixed = pr.rescue_collapsed(drift, 148.33)
+check("cứu xong: không còn cue dài 0, đủ số câu, đúng thứ tự chữ",
+      pr.collapsed_count(fixed) == 0 and len(fixed) == len(drift)
+      and [s["text"] for s in fixed] == [s["text"] for s in drift])
+check("mọi mốc nằm trong video, tăng dần, không chồng",
+      all(0 <= s["start"] < s["end"] <= 148.33 for s in fixed)
+      and all(a["end"] <= b["start"] + 1e-6 for a, b in zip(fixed, fixed[1:])))
+mid = [{"start": 0, "end": 5, "text": "a"}, {"start": 5, "end": 5, "text": "b"},
+       {"start": 6, "end": 9, "text": "c"}]
+check("dồn cục ở GIỮA thì để nguyên (không đoán)", pr.rescue_collapsed(mid, 10) == mid)
+check("không có cue dồn cục thì trả nguyên", pr.rescue_collapsed(drift[:5], 148.33) == drift[:5])
+
 print(f"\n{passed} pass, {failed} fail")
 sys.exit(1 if failed else 0)
