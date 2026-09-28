@@ -629,7 +629,12 @@ async def catalog(payload: Dict[str, Any]) -> Dict[str, Any]:
     entry = next((e for e in public_entries() if e["hash"] == h), None)
     if not entry or not _visible_to(entry["settings"], caller):
         raise PublicSkillError("agent_not_public", status=404)
-    if skill_id != "capcut.tts" or skill_id not in entry["settings"]["skills"]:
+    # Agent đang NHẬN VIỆC thuê (hire_on) cũng được xem danh mục giọng dù không mở skill
+    # chat capcut.tts: form thuê trên Town cho khách chọn giọng đọc theo mẫu (user 28/9).
+    # Chỉ đọc danh mục — invoke capcut.tts thật vẫn bị chặn như cũ nếu skill không bật.
+    st = entry["settings"]
+    _hire_ok = bool(st.get("hire_on") and st.get("hire_presets"))
+    if skill_id != "capcut.tts" or (skill_id not in st["skills"] and not _hire_ok):
         raise PublicSkillError("skill_not_allowed", status=403)
 
     from tubecli.core import public_tts

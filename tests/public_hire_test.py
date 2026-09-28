@@ -114,10 +114,50 @@ check("agent lạ → agent_not_public", rc({**base, "job": "x" * 12, "agent": "
 check("skill lạ → skill_unavailable", rc({**base, "job": "y" * 12, "skill": "layout.image"}) == "skill_unavailable")
 check("mẫu agent không khai → template_missing", rc({**base, "job": "z" * 12, "preset": "Mẫu Lạ"}) == "template_missing")
 check("mã việc sai dạng → bad_request", rc({**base, "job": "ABC!"}) == "bad_request")
+# Giọng + tiêu đề khách chọn (form thuê 28/9): hợp lệ thì lưu vào việc, sai dạng thì
+# BỎ LẶNG LẼ (video vẫn dựng bằng mặc định của mẫu, không từ chối việc).
+rc({**base, "job": "v" * 12, "voice": "BV075_streaming", "title": "  Pin   thể rắn  2027 "})
+check("receive: giọng + tiêu đề hợp lệ lưu vào việc, tiêu đề nén khoảng trắng",
+      ph._jobs["v" * 12]["voice"] == "BV075_streaming" and ph._jobs["v" * 12]["title"] == "Pin thể rắn 2027",
+      ph._jobs.get("v" * 12))
+rc({**base, "job": "w" * 12, "voice": "bậy bạ có dấu!", "title": ""})
+check("receive: giọng sai dạng → bỏ lặng lẽ, việc vẫn nhận",
+      ph._jobs["w" * 12]["voice"] == "" and ("w" * 12) in _ran)
 pa._load_all = lambda: {"A1": dict(only, hire_on=False, skills=["capcut.tts"])}
 check("hire tắt → hire_off", rc({**base, "job": "t" * 12}) == "hire_off")
 pa._load_all = lambda: {"A1": dict(only, name="Chi Cho Thue"),
+                        "A2": {"enabled": True, "skills": ["capcut.tts"], "name": "Chat Thuong"},
+                        "A3": {"enabled": True, "skills": ["douyin.resolve"], "name": "Khong Lien Quan"}}
+pa._agents_by_id = lambda: {"A1": object(), "A2": object(), "A3": object()}
+
+# ── 4b. catalog giọng mở cho agent CHỈ-CHO-THUÊ (không skill chat capcut.tts) ─
+_fake_tts = types.SimpleNamespace(catalog_blocking=lambda: {
+    "languages": [{"code": "vi", "count": 1}],
+    "voices": [{"id": "BV075_streaming", "lang": "vi", "name": "Ánh Xuân"}]})
+_old_tts = sys.modules.get("tubecli.core.public_tts")
+sys.modules["tubecli.core.public_tts"] = _fake_tts
+H3 = next(e["hash"] for e in pa.public_entries() if e["agent_id"] == "A3")
+
+
+def rcat(agent_hash):
+    try:
+        return asyncio.run(pa.catalog({"agent": agent_hash, "skill": "capcut.tts"}))
+    except pa.PublicSkillError as e:
+        return e.code
+
+
+got = rcat(H1)
+check("catalog: agent chỉ-cho-thuê vẫn xem được danh mục giọng (form thuê chọn giọng)",
+      isinstance(got, dict) and got["voices"][0]["id"] == "BV075_streaming", got)
+check("catalog: agent KHÔNG hire, không capcut.tts → vẫn skill_not_allowed",
+      rcat(H3) == "skill_not_allowed")
+if _old_tts is not None:
+    sys.modules["tubecli.core.public_tts"] = _old_tts
+else:
+    sys.modules.pop("tubecli.core.public_tts", None)
+pa._load_all = lambda: {"A1": dict(only, name="Chi Cho Thue"),
                         "A2": {"enabled": True, "skills": ["capcut.tts"], "name": "Chat Thuong"}}
+pa._agents_by_id = lambda: {"A1": object(), "A2": object()}
 
 # ── 5. _run trọn vòng (mock codex + ffprobe) ─────────────────────────────────
 vid = os.path.join(_tmp, "video thue.mp4")
@@ -138,23 +178,32 @@ class _FakePipeline(types.ModuleType):
     pass
 
 
+seen_opts = {}
+
+
 def setup_run(monkey_status=None):
     reports.clear()
     ph._http_json = fake_http
+
+    def _fake_create(aid, options=None, **k):
+        seen_opts.clear()
+        seen_opts.update(options or {})
+        return {"id": "task-123"}
+
     fake = types.SimpleNamespace(
-        create_auto_task=lambda *a, **k: {"id": "task-123"},
+        create_auto_task=_fake_create,
         media_seconds=lambda p: 95.0,
         _base_url=lambda: "http://x")
     sys.modules["tubecli.extensions.content_video.pipeline"] = fake      # _run import từ đây
     return fake
 
 
-async def run_fast(code):
+async def run_fast(code, **extra):
     ph.POLL_SEC = 0.01
     ph.REPORT_MIN_GAP = 0
     job = {"code": code, "agent_id": "A1", "preset": "Mẫu A", "brief": "x", "unit": "minute",
            "minutes": 3, "price": 3000, "status": "accepted", "task_id": "", "files": [],
-           "paths": [], "seconds": 0, "at": 0}
+           "paths": [], "seconds": 0, "at": 0, **extra}
     ph._jobs[code] = job
 
     async def stepper():
@@ -169,7 +218,10 @@ ph._run = _orig_run
 _real_run_import = sys.modules.get("tubecli.extensions.content_video.pipeline")
 setup_run()
 state["phase"] = 0
-job = asyncio.run(run_fast("job1ok123456"))
+job = asyncio.run(run_fast("job1ok123456", voice="BV075_streaming", title="Pin thể rắn"))
+check("_run: giọng khách chọn → tts_engine capcut + capcut_speaker; tiêu đề vào options",
+      seen_opts.get("tts_engine") == "capcut" and seen_opts.get("capcut_speaker") == "BV075_streaming"
+      and seen_opts.get("title") == "Pin thể rắn", seen_opts)
 ready = [r for r in reports if r["status"] == "ready"]
 check("_run: báo ready kèm file + SỐ GIÂY đo bằng ffprobe",
       job["status"] in ("reported", "delivered", "ready") and ready and ready[0]["seconds"] == 95

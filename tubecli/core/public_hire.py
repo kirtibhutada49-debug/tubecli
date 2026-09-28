@@ -172,6 +172,13 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not _studio_preset_exists(preset):
         raise PublicSkillError("template_missing", status=409)
 
+    # Tuỳ chọn khách gửi kèm (form thuê trên Town, user 28/9): giọng CapCut của CHÍNH máy
+    # này (khách chọn từ danh mục catalog) + tiêu đề video. Sai dạng → bỏ lặng lẽ, video
+    # vẫn dựng bằng giọng/tiêu đề mặc định của mẫu — không phải lý do để từ chối việc.
+    voice = str(payload.get("voice") or "")
+    if not re.match(r"^[A-Za-z0-9_.-]{2,64}$", voice):
+        voice = ""
+    title = " ".join(str(payload.get("title") or "").split())[:120]
     async with _lock:
         if code in _jobs:            # cloud gọi lại (mạng chớp) — không mở việc thứ hai
             return {"ok": True, "job": code}
@@ -179,6 +186,7 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
         job = {"code": code, "agent_id": entry["agent_id"], "preset": preset, "brief": brief,
                "unit": "minute" if payload.get("unit") == "minute" else "job",
                "minutes": minutes, "price": int(payload.get("price") or 0),
+               "voice": voice, "title": title,
                "status": "accepted", "task_id": "", "files": [], "paths": [],
                "seconds": 0, "at": time.time()}
         _jobs[code] = job
@@ -227,6 +235,13 @@ async def _run(code: str) -> None:
         options = {"source_text": job["brief"], "preset": job["preset"],
                    "target_words": max(120, min(9000, job["minutes"] * 150)),
                    "job_label": "Việc thuê từ Town"}
+        # Khách chọn giọng/tiêu đề trên form thuê → đè lên mặc định của mẫu. Giọng là
+        # capcut_speaker của CHÍNH máy này (khách chọn từ catalog); không chọn thì thôi.
+        if job.get("voice"):
+            options["tts_engine"] = "capcut"
+            options["capcut_speaker"] = job["voice"]
+        if job.get("title"):
+            options["title"] = job["title"]
         task = await asyncio.to_thread(
             lambda: create_auto_task(job["agent_id"], options, created_by="hire",
                                      origin={"agent_id": job["agent_id"], "hire": code},
