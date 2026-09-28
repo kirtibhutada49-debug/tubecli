@@ -219,7 +219,9 @@ async def _guest_allowed(request: Request, scope: dict) -> bool:
             return _mine(mo.group(1))
         mo = _re.match(r"^/api/v1/browser/preview/(?:upload|upload-chunk|upload-finalize)/(\d+)$", p)
         if mo and m == "POST":
-            return str(scope.get("upload") or "off") == "media" and _mine(mo.group(1))
+            # "owner" = người xem CHÍNH LÀ chủ máy (máy tự so mã người gọi lúc mở phiên, xem
+            # core/public_browser) — nới trần loại/cỡ file ở routes._public_upload_limits.
+            return str(scope.get("upload") or "off") in ("media", "owner") and _mine(mo.group(1))
         return False
 
     if m == "GET" and p in ("/api/v1/browser/status", "/api/v1/browser/profiles"):

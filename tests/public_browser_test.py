@@ -355,6 +355,69 @@ _gs = _gs[:_gs.index("broadcast({ type: 'selection'")]
 check("get_selection đọc cả ô nhập/textarea nhưng KHÔNG đọc ô mật khẩu",
       "selectionStart" in _gs and "password" not in _gs and "text|search|url|tel|email|number|" in _gs)
 
+# ── Chủ máy tự dùng trình duyệt chia sẻ: tải lên mọi file (vd. video lên YouTube — user 28/9) ──
+OWN = {**PUB, "upload": "owner"}
+own_req = types.SimpleNamespace(state=types.SimpleNamespace(guest_scope=OWN), headers={})
+pub_req.headers = {}
+
+
+def st_of(fn):
+    try:
+        asyncio.run(fn())
+        return 0
+    except HTTPException as e:
+        return e.status_code
+
+
+check("gate: phiên của chủ được tải lên", allowed("POST", "/api/v1/browser/preview/upload-chunk/41001", OWN))
+check("cài đặt KHÔNG đặt được «owner» (chỉ máy cấp theo mã người gọi) → media",
+      pa.normalise({"name": "Tro Ly", "enabled": True, "skills": ["browser.remote"], "browser_profile": "shared",
+                    "browser_upload": "owner"})["browser_upload"] == "media")
+_s = st_of(lambda: br.api_preview_upload_files(own_req, 41001, [UploadFile(io.BytesIO(b"MZ"), filename="setup.exe")]))
+check("chủ: file .exe qua bước kiểm (chỉ vấp vì preview giả không chạy)", _s not in (400, 413, 415), _s)
+check("chủ: 21 file → 400",
+      st_of(lambda: br.api_preview_upload_files(own_req, 41001,
+                                                [UploadFile(io.BytesIO(b"x"), filename=f"a{i}.bin") for i in range(21)])) == 400)
+check("chủ: mảnh thứ 3000 (file vài GB) được nhận",
+      st_of(lambda: br.api_preview_upload_chunk(own_req, 41001, "t1", "video.mkv", 3000,
+                                                UploadFile(io.BytesIO(b"x"), filename="blob"))) == 0)
+check("người lạ: mảnh thứ 60 → 400 (trần 25 MB)",
+      st_of(lambda: br.api_preview_upload_chunk(pub_req, 41001, "t2", "a.mp4", 60,
+                                                UploadFile(io.BytesIO(b"x"), filename="blob"))) == 400)
+check("người lạ: .exe qua đường chia mảnh vẫn 415",
+      st_of(lambda: br.api_preview_upload_chunk(pub_req, 41001, "t3", "a.exe", 0,
+                                                UploadFile(io.BytesIO(b"x"), filename="blob"))) == 415)
+check("chủ: tên file rỗng / '..' → 400",
+      st_of(lambda: br.api_preview_upload_chunk(own_req, 41001, "t4", "..", 0,
+                                                UploadFile(io.BytesIO(b"x"), filename="blob"))) == 400)
+_real_du = shutil.disk_usage
+shutil.disk_usage = lambda p: types.SimpleNamespace(total=0, used=0, free=500 * 1024 * 1024)
+check("chủ: đĩa còn < 1 GB → 507, không làm đầy máy",
+      st_of(lambda: br.api_preview_upload_chunk(own_req, 41001, "t5", "video.mkv", 0,
+                                                UploadFile(io.BytesIO(b"x"), filename="blob"))) == 507)
+shutil.disk_usage = _real_du
+for n in os.listdir(br._upload_temp_dir()):
+    if n.startswith(br.public_upload_prefix(41001)):
+        shutil.rmtree(os.path.join(br._upload_temp_dir(), n), ignore_errors=True)
+
+pa.owner_caller = lambda: "abcdef99"
+
+
+async def owner_vs_stranger():
+    o = await pb.resolve('{"action":"start"}', {"_agent_id": "A3", "_caller": "abcdef99", "_settings": ST})
+    x = await pb.resolve('{"action":"start"}', {"_agent_id": "A4", "_caller": "12345678", "_settings": ST})
+    so, sx = auth.guest_scope_for(o["token"]), auth.guest_scope_for(x["token"])
+    for aid, r in (("A3", o), ("A4", x)):
+        await pb._end(aid, r["session"])
+    return o, x, so, sx
+
+
+_o, _x, _so, _sx = asyncio.run(owner_vs_stranger())
+check("mã người gọi = mã chủ → phiên «owner» dù chủ tắt tải lên cho người lạ, dài 2 giờ",
+      _o["upload"] == "owner" and _so["upload"] == "owner" and 7100 <= _o["expires_in"] <= 7200, (_o["upload"], _o["expires_in"]))
+check("người lạ vẫn theo cài đặt (tải lên tắt, 10 phút)",
+      _x["upload"] == "off" and _sx["upload"] == "off" and _x["expires_in"] <= 600, (_x["upload"], _x["expires_in"]))
+
 shutil.rmtree(_tmp, ignore_errors=True)
 print(f"\n{passed} pass, {failed} fail")
 sys.exit(1 if failed else 0)

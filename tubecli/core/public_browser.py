@@ -31,6 +31,15 @@ from tubecli.core.public_agents import PublicSkillError
 logger = logging.getLogger("public_browser")
 
 _SESSION_RE = re.compile(r"^[a-f0-9]{16}$")
+OWNER_SESSION_SEC = 2 * 3600       # chủ tự dùng: đủ đẩy một video lớn qua tunnel rồi lên YouTube
+
+
+def public_agents_owner() -> str:
+    from tubecli.core import public_agents
+    try:
+        return str(public_agents.owner_caller() or "")
+    except Exception:      # noqa: BLE001 — không biết chủ thì coi như người lạ
+        return ""
 _sessions: Dict[str, Dict[str, Any]] = {}      # agent_id → phiên đang chạy
 _lock = asyncio.Lock()
 
@@ -142,6 +151,15 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
         ttl = max(60, min(3600, minutes * 60))
         sid = secrets.token_hex(8)
         upload = "media" if str(st.get("browser_upload") or "media") == "media" else "off"
+        # Người xem CHÍNH LÀ chủ máy (mã người gọi = mã chủ cloud ghi vào cloud_identity; cloud
+        # tính mã từ phiên đăng nhập, người xem không tự xưng được): tải lên mọi loại file từ
+        # máy đang dùng (vd. video đăng YouTube — user 28/9), kể cả khi chủ tắt tải lên cho
+        # người lạ; phiên dài đủ cho một video lớn.
+        owner = public_agents_owner()
+        if owner and caller == owner:
+            upload = "owner"
+            ttl = max(ttl, OWNER_SESSION_SEC)
+            minutes = ttl // 60
         scope = {"workspace": f"pubbrowser_{sid}", "public": True, "profiles": [profile],
                  "access": "control", "upload": upload}
         tok = auth.mint_guest_token(scope, ttl)

@@ -3866,6 +3866,7 @@ async def proxy_preview_control(port: int, action: str, request: Request):
 # Chỉ từ máy CỦA HỌ (bytes gửi lên) — đường chọn file trên máy chủ (upload-local,
 # set-input, attach-file, drive-attach) đã bị gate chặn hẳn. Thêm trần: ≤5 file, mỗi file
 # ≤25 MB, chỉ ảnh/video/PDF; file nằm trong temp_uploads/pub<port>_* để dọn khi hết phiên.
+# Chủ máy tự dùng (upload="owner") được trần rộng hơn — xem OWNER_UPLOAD_*.
 PUBLIC_UPLOAD_MAX_FILES = 5
 PUBLIC_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
 PUBLIC_UPLOAD_EXTS = {
@@ -3882,6 +3883,56 @@ def _public_scope(request) -> Optional[dict]:
 def _public_name_ok(name: str) -> bool:
     n = os.path.basename(str(name or ""))
     return bool(n) and os.path.splitext(n)[1].lower() in PUBLIC_UPLOAD_EXTS
+
+
+# Người xem CHÍNH LÀ chủ máy (máy tự so mã người gọi lúc mở phiên — core/public_browser):
+# upload="owner" → mọi loại file (vd. video đăng YouTube), nhiều + lớn hơn, đi đường chia
+# mảnh. Người lạ vẫn trần cũ. Chừa ≥1 GB đĩa trống: file lớn không được làm đầy máy.
+OWNER_UPLOAD_MAX_FILES = 20
+OWNER_UPLOAD_MAX_BYTES = 8 * 1024 ** 3
+OWNER_UPLOAD_MIN_FREE = 1024 ** 3
+
+
+def _public_upload_limits(request) -> Optional[dict]:
+    """Trần tải lên của khách công khai; None = không phải khách công khai (luật cũ)."""
+    sc = _public_scope(request)
+    if sc is None:
+        return None
+    if str(sc.get("upload") or "") == "owner":
+        return {"files": OWNER_UPLOAD_MAX_FILES, "bytes": OWNER_UPLOAD_MAX_BYTES, "exts": None,
+                "chunks": 4000, "owner": True}
+    return {"files": PUBLIC_UPLOAD_MAX_FILES, "bytes": PUBLIC_UPLOAD_MAX_BYTES, "exts": PUBLIC_UPLOAD_EXTS,
+            "chunks": 50, "owner": False}
+
+
+def _limit_name_ok(lim: dict, name) -> bool:
+    n = os.path.basename(str(name or ""))
+    if not n or n in (".", ".."):
+        return False
+    return lim["exts"] is None or os.path.splitext(n)[1].lower() in lim["exts"]
+
+
+def _limit_name_error(lim: dict) -> HTTPException:
+    return HTTPException(400 if lim["owner"] else 415,
+                         "Tên file không hợp lệ." if lim["owner"] else "Chỉ nhận ảnh, video hoặc PDF.")
+
+
+def _limit_size_error(lim: dict) -> HTTPException:
+    b = lim["bytes"]
+    return HTTPException(413, f"Mỗi file tối đa {b // 1024 ** 3} GB." if b >= 1024 ** 3
+                         else f"Mỗi file tối đa {b // (1024 * 1024)} MB.")
+
+
+def _owner_disk_check(lim: Optional[dict], incoming: int = 0) -> None:
+    if not lim or not lim["owner"]:
+        return
+    import shutil
+    try:
+        free = shutil.disk_usage(_upload_temp_dir()).free
+    except Exception:
+        return
+    if free - incoming < OWNER_UPLOAD_MIN_FREE:
+        raise HTTPException(507, "Ổ đĩa máy chủ sắp đầy — không nhận thêm file.")
 
 
 def public_upload_prefix(port: int) -> str:
@@ -3909,12 +3960,14 @@ async def api_preview_upload_files(request: Request, port: int, files: List[Uplo
     temp_dir = os.path.join(ext_dir, "data", "temp_uploads")
     os.makedirs(temp_dir, exist_ok=True)
 
-    public = _public_scope(request) is not None
+    lim = _public_upload_limits(request)
+    public = lim is not None
     if public:
-        if len(files) > PUBLIC_UPLOAD_MAX_FILES:
-            raise HTTPException(400, f"Tối đa {PUBLIC_UPLOAD_MAX_FILES} file mỗi lần.")
-        if any(not _public_name_ok(f.filename) for f in files):
-            raise HTTPException(415, "Chỉ nhận ảnh, video hoặc PDF.")
+        if len(files) > lim["files"]:
+            raise HTTPException(400, f"Tối đa {lim['files']} file mỗi lần.")
+        if any(not _limit_name_ok(lim, f.filename) for f in files):
+            raise _limit_name_error(lim)
+        _owner_disk_check(lim)
 
     # Create unique directory for this upload batch
     upload_id = (public_upload_prefix(port) if public else "") + str(uuid.uuid4())
@@ -3931,8 +3984,8 @@ async def api_preview_upload_files(request: Request, port: int, files: List[Uplo
             with open(dest_path, "wb") as buffer:
                 while chunk := await file.read(1024 * 1024):
                     written += len(chunk)
-                    if public and written > PUBLIC_UPLOAD_MAX_BYTES:
-                        raise HTTPException(413, "Mỗi file tối đa 25 MB.")
+                    if public and written > lim["bytes"]:
+                        raise _limit_size_error(lim)
                     buffer.write(chunk)
             file_paths.append(dest_path)
             
@@ -3988,13 +4041,15 @@ async def api_preview_upload_chunk(
     uid = _safe_upload_id(upload_id)
     if not uid:
         raise HTTPException(400, "upload_id không hợp lệ")
-    public = _public_scope(request) is not None
+    lim = _public_upload_limits(request)
+    public = lim is not None
     if public:
-        if not _public_name_ok(file_name):
-            raise HTTPException(415, "Chỉ nhận ảnh, video hoặc PDF.")
-        if int(chunk_index) < 0 or int(chunk_index) > 50:
+        if not _limit_name_ok(lim, file_name):
+            raise _limit_name_error(lim)
+        if int(chunk_index) < 0 or int(chunk_index) > lim["chunks"]:
             raise HTTPException(400, "chunk_index không hợp lệ")
         uid = public_upload_prefix(port) + uid     # khách không chọn được thư mục ngoài vùng của mình
+        _owner_disk_check(lim, int(request.headers.get("content-length") or 0))
     batch_dir = os.path.join(_upload_temp_dir(), uid)
     os.makedirs(batch_dir, exist_ok=True)
     safe_name = os.path.basename(file_name)
@@ -4008,8 +4063,8 @@ async def api_preview_upload_chunk(
         with open(part_path, "wb") as buffer:
             while data := await chunk.read(1024 * 1024):
                 written += len(data)
-                if public and already + written > PUBLIC_UPLOAD_MAX_BYTES:
-                    raise HTTPException(413, "Mỗi file tối đa 25 MB.")
+                if public and already + written > lim["bytes"]:
+                    raise _limit_size_error(lim)
                 buffer.write(data)
     except HTTPException:
         try:
@@ -4034,37 +4089,43 @@ async def api_preview_upload_finalize(request: Request, port: int, req: UploadFi
     import requests
 
     uid = _safe_upload_id(req.upload_id)
-    if _public_scope(request) is not None:
-        if len(req.files) > PUBLIC_UPLOAD_MAX_FILES:
-            raise HTTPException(400, f"Tối đa {PUBLIC_UPLOAD_MAX_FILES} file mỗi lần.")
-        if any(not _public_name_ok(f.get("name", "")) for f in req.files):
-            raise HTTPException(415, "Chỉ nhận ảnh, video hoặc PDF.")
+    lim = _public_upload_limits(request)
+    if lim is not None:
+        if len(req.files) > lim["files"]:
+            raise HTTPException(400, f"Tối đa {lim['files']} file mỗi lần.")
+        if any(not _limit_name_ok(lim, f.get("name", "")) for f in req.files):
+            raise _limit_name_error(lim)
         uid = public_upload_prefix(port) + uid
     batch_dir = os.path.join(_upload_temp_dir(), uid)
     if not uid or not os.path.isdir(batch_dir):
         raise HTTPException(400, "Phiên upload không tồn tại")
+
+    def _assemble(safe_name: str, total: int) -> str:
+        # Chạy trong luồng phụ: ghép vài GB (video của chủ) ngay trong vòng sự kiện là đứng
+        # cả server tới lúc ghép xong.
+        final_path = os.path.join(batch_dir, safe_name)
+        with open(final_path, "wb") as out:
+            for i in range(total):
+                part_path = os.path.join(batch_dir, f"{safe_name}.part{i:06d}")
+                if not os.path.exists(part_path):
+                    raise HTTPException(400, f"Thiếu mảnh {i} của {safe_name}")
+                with open(part_path, "rb") as p:
+                    while data := p.read(1024 * 1024):
+                        out.write(data)
+                try:
+                    os.remove(part_path)
+                except Exception:
+                    pass
+        return final_path
 
     file_paths = []
     try:
         for f in req.files:
             safe_name = os.path.basename(str(f.get("name", "")))
             total = int(f.get("total_chunks", 0))
-            if not safe_name or total <= 0:
+            if not safe_name or total <= 0 or (lim is not None and total > lim["chunks"] + 1):
                 raise HTTPException(400, "Thông tin file không hợp lệ")
-            final_path = os.path.join(batch_dir, safe_name)
-            with open(final_path, "wb") as out:
-                for i in range(total):
-                    part_path = os.path.join(batch_dir, f"{safe_name}.part{i:06d}")
-                    if not os.path.exists(part_path):
-                        raise HTTPException(400, f"Thiếu mảnh {i} của {safe_name}")
-                    with open(part_path, "rb") as p:
-                        while data := p.read(1024 * 1024):
-                            out.write(data)
-                    try:
-                        os.remove(part_path)
-                    except Exception:
-                        pass
-            file_paths.append(final_path)
+            file_paths.append(await asyncio.to_thread(_assemble, safe_name, total))
 
         node_url = f"http://localhost:{port}/upload-files"
         response = await asyncio.to_thread(
