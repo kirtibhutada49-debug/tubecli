@@ -157,6 +157,9 @@ async def _run_job(jid: str, link: str, opts: Dict[str, Any]) -> None:
         # 2. Tách phụ đề (+ dịch nếu chọn)
         _set(jid, step="subtitle", done=0, total=0)
         subs = await _extract(str(src), str(opts.get("lang") or ""), jid)
+        # Bước 3.5 của ReupDouyin: cắt dòng dài trước khi lồng — phụ đề giao ra (.srt)
+        # cũng là bản đã cắt, đúng như bản gốc cho người dùng duyệt.
+        subs = reup_dub.split_long_subtitles(subs)
 
         # 3. Lồng tiếng theo logic ReupDouyin
         _set(jid, step="dub", done=0, total=len(subs))

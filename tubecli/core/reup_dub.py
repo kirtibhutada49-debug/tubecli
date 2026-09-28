@@ -2,13 +2,17 @@
 (user 28/9/2026: «tích hợp logic lồng tiếng của ReupDouyin»).
 
 Giữ nguyên xương sống 4 bước + các hằng số đã trả giá thật bên đó:
-  1. TTS từng câu bằng Edge-TTS (mp3, retry 1 lần, câu hỏng bỏ qua, cache voice+text).
+  1. TTS từng câu bằng Edge-TTS, SONG SONG 3 luồng (giãn nhịp 0.15 s trong slot chống
+     Microsoft rate-limit), retry có backoff, câu hỏng bỏ qua; ép khớp 4 luồng. Ghép theo
+     CHỈ SỐ nên câu sau xong trước cũng không đảo thứ tự.
   2. Ép khớp khung phụ đề: giọng dài hơn khung >2% thì atempo (chuỗi khi hệ số >2,
      trần 2.5x — nhanh hơn nữa khó nghe, chấp nhận tràn).
   3. Ghép track: anullsrc + adelay từng câu + amix normalize=0; quá 50 câu mix theo
      lô 30 (một lệnh amix quá nhiều đầu vào là ffmpeg gãy).
   4. Mux: "replace" thay hẳn âm gốc, "mix" giữ nền gốc hạ xuống bg_volume.
-Kèm ghi (burn) phụ đề tuỳ chọn. Các chế độ nặng của bản gốc (duck/tách nhạc Demucs,
+Kèm ghi (burn) phụ đề tuỳ chọn — dựng .ass với PlayRes = đúng khổ video (core/subtitles/
+burn.py bên đó): SRT + filter subtitles quy chiếu 288px rồi phóng lên nên chữ khổng lồ.
+Các chế độ nặng của bản gốc (duck/tách nhạc Demucs,
 co giãn video) không mang sang — skill công khai cần gọn và đoán được.
 
 Không ffprobe cũng chạy: imageio-ffmpeg không kèm ffprobe (bài học lõi .129) — đo thời
@@ -16,9 +20,7 @@ lượng bằng ffprobe nếu có, không thì bóc "Duration:" từ stderr củ
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -33,6 +35,8 @@ FIT_TOLERANCE = 1.02
 MAX_SPEEDUP = 2.5
 BATCH_THRESHOLD = 50
 BATCH_SIZE = 30
+TTS_CONCURRENCY = 3
+FIT_CONCURRENCY = 4
 
 EDGE_VOICES = {
     "vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural",
@@ -163,6 +167,149 @@ def write_srt(subtitles: List[Dict], path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+_SIZE_RE = re.compile(r"Video:[^\n]*?\b(\d{2,5})x(\d{2,5})\b")
+
+
+async def video_size(path: str, ffmpeg: str) -> tuple:
+    r = await _run_ff([ffmpeg, "-i", path], 60)
+    m = _SIZE_RE.search((r.stderr or "") + (r.stdout or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def _ass_time(sec: float) -> str:
+    cs = max(0, round(sec * 100))
+    h, cs = divmod(cs, 360_000)
+    m, cs = divmod(cs, 6_000)
+    s, cs = divmod(cs, 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def build_ass(subs: List[Dict], w: int, h: int) -> str:
+    """Chữ ~5.5% cạnh ngắn (nhất quán dọc/ngang), lề ngang 5% (ngang 12%), cách đáy 6%,
+    tối đa 2 dòng: cue dài tự thu cỡ (sàn 14px) — y hệt ReupDouyin khi không dò box."""
+    S = min(w, h)
+    font = max(16, int(round(S * 0.055)))
+    ml = int(round(w * (0.12 if w > h else 0.05)))
+    mv = int(round(h * 0.06))
+    outline = max(1, round(font * 0.09))
+    shadow = max(0, round(font * 0.04))
+    head = "\n".join([
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {w}", f"PlayResY: {h}",
+        "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,Arial,{font},&H00FFFFFF,&H000000FF,&H00000000,&H90000000,0,0,0,0,100,100,0,0,1,"
+        f"{outline},{shadow},2,{ml},{ml},{mv},1", "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", "",
+    ])
+    usable = max(1, w - 2 * ml)
+    ev = []
+    for s in subs:
+        raw = str(s.get("text") or "").strip()
+        # «{» mở khối lệnh ASS — chữ người dùng không được thành lệnh định dạng.
+        text = raw.replace("{", "(").replace("}", ")").replace("\n", r"\N")
+        fs = max(14, min(font, int((2 * usable) / (0.6 * max(1, len(raw))))))
+        pre = r"{\fs%d}" % fs if fs != font else ""
+        ev.append(f"Dialogue: 0,{_ass_time(float(s['start']))},{_ass_time(float(s['end']))},"
+                  f"Default,,{ml},{ml},{mv},,{pre}{text}")
+    return head + "\n".join(ev) + "\n"
+
+
+# ── Tách dòng dài (ReupDouyin core/subtitles/segment.py, bước 3.5 của pipeline) ──
+# Gemini hay gom cả đoạn 10–15 s vào MỘT dòng → tường chữ, đọc không kịp, lồng tiếng
+# dễ lệch. Cắt tại ranh giới câu rồi mệnh đề, gói mảnh ≤ max_chars, chia lại mốc thời
+# gian theo tỷ lệ số ký tự; mảnh cuối kết đúng end gốc.
+_BREAKS = "。．！？!?…；;，、,:："
+_SEG_RE = re.compile(rf"[^{re.escape(_BREAKS)}]+[{re.escape(_BREAKS)}]?")
+
+
+def _segments(text: str) -> List[str]:
+    return [m.group().strip() for m in _SEG_RE.finditer(text) if m.group().strip()]
+
+
+def _hard_split(seg: str, max_chars: int) -> List[str]:
+    """Mệnh đề dài hơn max_chars: cắt CÂN BẰNG theo từ (hoặc theo ký tự với CJK)."""
+    if len(seg) <= max_chars:
+        return [seg]
+    n = max(2, -(-len(seg) // max_chars))
+    target = -(-len(seg) // n)
+    if " " in seg:
+        out, cur = [], ""
+        for w in seg.split(" "):
+            if cur and len(cur) + 1 + len(w) > target and len(out) < n - 1:
+                out.append(cur)
+                cur = w
+            else:
+                cur = w if not cur else cur + " " + w
+        if cur:
+            out.append(cur)
+        return out
+    size = -(-len(seg) // n)
+    return [seg[i:i + size] for i in range(0, len(seg), size)] or [seg]
+
+
+def _pack(text: str, max_chars: int) -> List[str]:
+    sep = " " if " " in text.strip() else ""
+    units: List[str] = []
+    for seg in _segments(text):
+        units.extend([seg] if len(seg) <= max_chars else _hard_split(seg, max_chars))
+    pieces, cur = [], ""
+    for u in units:
+        if not cur:
+            cur = u
+        elif len(cur) + len(sep) + len(u) <= max_chars:
+            cur = cur + sep + u
+        else:
+            pieces.append(cur)
+            cur = u
+    if cur:
+        pieces.append(cur)
+    pieces = pieces or [text]
+    # mảnh cuối quá ngắn (mồ côi) thì gộp vào mảnh trước nếu không vượt quá nhiều
+    if len(pieces) >= 2 and len(pieces[-1]) < max_chars * 0.35:
+        merged = pieces[-2] + sep + pieces[-1]
+        if len(merged) <= int(max_chars * 1.3):
+            pieces = pieces[:-2] + [merged]
+    return pieces
+
+
+def split_long_subtitles(subs: List[Dict], max_chars: int = 56, max_cps: float = 18.0,
+                         max_dur: float = 7.0, min_piece_dur: float = 0.6) -> List[Dict]:
+    out: List[Dict] = []
+    for s in subs:
+        text = str(s.get("text") or "").strip()
+        try:
+            start = float(s.get("start", 0))
+            end = float(s.get("end", start))
+        except (TypeError, ValueError):
+            continue
+        dur = end - start
+        if not text or dur <= 0 or not (len(text) > max_chars or len(text) / dur > max_cps
+                                         or dur > max_dur):
+            out.append({**s, "start": start, "end": end, "text": text})
+            continue
+        pieces = _pack(text, max_chars)
+        if len(pieces) <= 1:
+            out.append({**s, "start": start, "end": end, "text": text})
+            continue
+        total_chars = sum(len(p) for p in pieces) or 1
+        t, n = start, len(pieces)
+        for i, p in enumerate(pieces):
+            if i == n - 1:
+                seg_end = end
+            else:
+                seg_end = min(end - min_piece_dur * (n - 1 - i),
+                              t + max(min_piece_dur, dur * len(p) / total_chars))
+                if seg_end <= t:
+                    seg_end = t + min_piece_dur
+            out.append({**s, "start": round(t, 3), "end": round(seg_end, 3), "text": p})
+            t = seg_end
+    return out
+
+
 def _subtitles_filter_path(p: Path) -> str:
     """Đường dẫn cho filter subtitles trên Windows: \\ -> /, thoát dấu hai chấm ổ đĩa."""
     s = str(p).replace("\\", "/").replace(":", "\\:")
@@ -195,25 +342,31 @@ async def dub_video(video_path: str, subtitles: List[Dict], voice: str,
         video_dur = await media_duration(str(video), ffmpeg)
         total_dur = max(video_dur, max(float(s["end"]) for s in subs) + 0.5)
 
-        # 1+2. TTS từng câu + ép khớp khung
-        entries: List[tuple] = []
-        skipped = 0
-        for i, s in enumerate(subs):
-            text = str(s["text"]).strip()
-            key = hashlib.sha256(f"{voice}|{text}".encode("utf-8")).hexdigest()[:16]
-            mp3 = tmp / f"{key}.mp3"
+        # 1+2. TTS từng câu + ép khớp khung — song song, ghép lại theo chỉ số
+        tts_sem = asyncio.Semaphore(TTS_CONCURRENCY)
+        fit_sem = asyncio.Semaphore(FIT_CONCURRENCY)
+        got: Dict[int, tuple] = {}
+        done = 0
+
+        async def _one(i: int, s: Dict) -> None:
+            nonlocal done
+            mp3 = tmp / f"tts_{i:04d}.mp3"
             wav = tmp / f"seg_{i:04d}.wav"
-            if not mp3.exists():
-                if not await _edge_tts(text, voice, mp3):
-                    skipped += 1
-                    say("tts", i + 1, len(subs))
-                    continue
-            slot = float(s["end"]) - float(s["start"])
-            if not await _fit_segment(ffmpeg, mp3, wav, slot):
-                skipped += 1
-            else:
-                entries.append((float(s["start"]), wav))
-            say("tts", i + 1, len(subs))
+            async with tts_sem:
+                ok = await _edge_tts(str(s["text"]).strip(), voice, mp3)
+                # giãn nhịp TRONG slot: tốc độ gọi tỉ lệ số luồng, không dồn cục
+                await asyncio.sleep(0.15 if ok else 0.2)
+            if ok:
+                async with fit_sem:
+                    if await _fit_segment(ffmpeg, mp3, wav,
+                                          float(s["end"]) - float(s["start"])):
+                        got[i] = (float(s["start"]), wav)
+            done += 1
+            say("tts", done, len(subs))
+
+        await asyncio.gather(*(_one(i, s) for i, s in enumerate(subs)))
+        entries: List[tuple] = [got[i] for i in sorted(got)]
+        skipped = len(subs) - len(entries)
         if not entries:
             return {"status": "error", "message": "tts_failed"}
 
@@ -262,11 +415,14 @@ async def dub_video(video_path: str, subtitles: List[Dict], voice: str,
         final = dubbed
         if burn:
             say("burn", 0, 1)
-            srt = tmp / "subs.srt"
-            write_srt(subs, srt)
+            w, h = await video_size(str(dubbed), ffmpeg)
+            if not w or not h:
+                w, h = 720, 1280
+            ass = tmp / "subs.ass"
+            ass.write_text(build_ass(subs, w, h), encoding="utf-8")
             burned = tmp / "burned.mp4"
             r = await _run_ff([ffmpeg, "-y", "-i", str(dubbed),
-                               "-vf", _subtitles_filter_path(srt),
+                               "-vf", _subtitles_filter_path(ass),
                                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                                "-c:a", "copy", str(burned)], enc_timeout)
             if r.returncode == 0 and burned.exists():
