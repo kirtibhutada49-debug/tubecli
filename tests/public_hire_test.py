@@ -201,9 +201,11 @@ def setup_run(monkey_status=None):
 async def run_fast(code, **extra):
     ph.POLL_SEC = 0.01
     ph.REPORT_MIN_GAP = 0
+    # "_task" = vật KHÔNG json-hoá được, y như receive() treo asyncio.Task vào job.
+    # Bug 28/9: _save nổ TypeError vì nó → mọi việc «failed» oan ngay sau khi tạo task.
     job = {"code": code, "agent_id": "A1", "preset": "Mẫu A", "brief": "x", "unit": "minute",
            "minutes": 3, "price": 3000, "status": "accepted", "task_id": "", "files": [],
-           "paths": [], "seconds": 0, "at": 0, **extra}
+           "paths": [], "seconds": 0, "at": 0, "_task": object(), **extra}
     ph._jobs[code] = job
 
     async def stepper():
@@ -229,6 +231,10 @@ check("_run: báo ready kèm file + SỐ GIÂY đo bằng ffprobe",
       reports[-1] if reports else "không có báo cáo")
 check("_run: có báo tiến độ running trước khi giao",
       any(r["status"] == "running" for r in reports))
+disk = json.load(open(os.path.join(_tmp, "job1ok123456.json"), encoding="utf-8"))
+check("_save lọc khoá «_»: sổ trên đĩa ghi ĐƯỢC dù job mang _task, không còn báo hỏng oan",
+      disk["status"] in ("reported", "delivered", "ready") and "_task" not in disk
+      and disk["seconds"] == 95, disk.get("status"))
 
 # task hỏng → failed
 def fake_http_fail(path):

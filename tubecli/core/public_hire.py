@@ -53,13 +53,20 @@ def _dir() -> str:
 
 
 def _save(job: Dict[str, Any]) -> None:
-    """Sổ việc trên đĩa: restart giữa chừng vẫn phục vụ được file đã giao."""
+    """Sổ việc trên đĩa: restart giữa chừng vẫn phục vụ được file đã giao.
+
+    CHỈ ghi trường không bắt đầu bằng «_»: receive() treo `job["_task"]` (asyncio.Task —
+    json.dump nổ TypeError) vào job. Bug 28/9: _save chỉ bắt OSError nên TypeError xuyên
+    lên _run → mọi việc bị báo «failed» NGAY SAU khi tạo task thành công — khách được
+    hoàn tiền trong khi video vẫn âm thầm dựng (task mồ côi trên bảng của chủ). Bắt
+    Exception luôn: sổ hỏng chỉ được phép làm mất bản ghi, không được giết việc."""
     try:
         p = os.path.join(_dir(), f"{job['code']}.json")
+        data = {k: v for k, v in job.items() if not str(k).startswith("_")}
         with open(p + ".tmp", "w", encoding="utf-8") as f:
-            json.dump(job, f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False)
         os.replace(p + ".tmp", p)
-    except OSError as e:
+    except Exception as e:      # noqa: BLE001
         logger.warning("[hire] không ghi được sổ việc %s: %s", job.get("code"), e)
 
 
