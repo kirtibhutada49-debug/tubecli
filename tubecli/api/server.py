@@ -544,7 +544,10 @@ async def _require_login(request: Request, call_next):
             # refusal của chủ). Guest hợp lệ nhưng NGOÀI scope → 403 (khác 401 của chủ).
             gscope = None
             try:
-                gscope = auth.guest_scope_for(request.cookies.get(auth.GUEST_COOKIE))
+                # Token khách công khai trong header (chỉ scope public — xem auth.public_bearer_scope),
+                # còn lại cookie như cũ. Phạm vi vẫn do _guest_allowed quyết.
+                gscope = (auth.public_bearer_scope(request.headers.get(auth.GUEST_HEADER))
+                          or auth.guest_scope_for(request.cookies.get(auth.GUEST_COOKIE)))
             except Exception:
                 gscope = None
             if gscope is not None:
@@ -585,6 +588,17 @@ async def _guard_cross_origin(request: Request, call_next):
     # public address from reaching its own login form, which is precisely the
     # case the dashboard has to serve.
     if request.method != "OPTIONS" and not _auth_exempt(request.url.path):
+        try:
+            from tubecli.core import auth as _auth
+            from tubecli.core.origin_guard import public_guest_origin_ok
+            # Khách CÔNG KHAI (token trong header, phiên browser.remote): nhận thêm Origin
+            # tubecli.app / cloud.tubecreate.com mà chủ đã duyệt (28/9) — trang Town ở đó khác
+            # site với tunnel nên máy không bao giờ học được. Mọi lượt khác đi luật cũ bên dưới.
+            if (_auth.public_bearer_scope(request.headers.get(_auth.GUEST_HEADER))
+                    and public_guest_origin_ok(request.headers.get("origin"))):
+                return await call_next(request)
+        except Exception:
+            pass
         try:
             from tubecli.core.origin_guard import is_origin_allowed
             if not is_origin_allowed(request.headers.get("origin"),

@@ -3521,10 +3521,16 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
     guest_view_only = False
     guest_public = False
     guest_cookie = ""
+    guest_bearer = False   # khách công khai mang token trong subprotocol (không cookie)
     try:
         from tubecli.core import auth
-        guest_cookie = websocket.cookies.get(auth.GUEST_COOKIE) or ""
-        _gscope = auth.guest_scope_for(guest_cookie)
+        _bearer = auth.ws_guest_bearer(websocket.headers)
+        _gscope = auth.public_bearer_scope(_bearer) if _bearer else None
+        if _gscope:
+            guest_cookie, guest_bearer = _bearer, True
+        else:
+            guest_cookie = websocket.cookies.get(auth.GUEST_COOKIE) or ""
+            _gscope = auth.guest_scope_for(guest_cookie)
         if _gscope:
             _prof = _resolve_profile_for_port(port)
             guest_ok = bool(_prof) and _prof in set(str(x) for x in (_gscope.get("profiles") or []))
@@ -3543,12 +3549,17 @@ async def ws_preview_proxy(websocket: WebSocket, port: int):
 
     if guest_ok:
         from tubecli.core.ws_auth import origin_ok
-        if not origin_ok(websocket):
+        from tubecli.core.origin_guard import public_guest_origin_ok
+        # Khách công khai: nhận thêm Origin tubecli.app / cloud.tubecreate.com chủ đã duyệt.
+        _og = origin_ok(websocket) or (guest_bearer and public_guest_origin_ok(websocket.headers.get("origin") or ""))
+        if not _og:
             await websocket.close(code=1008, reason="cross_origin")
             return
     if not guest_ok and not await reject_unless_allowed(websocket):
         return
-    await websocket.accept()
+    # Trình duyệt đã chào subprotocol thì server PHẢI chọn đúng một cái, không thì nó tự
+    # huỷ kết nối — trả nhãn tubecli.guest, không bao giờ trả lại token.
+    await websocket.accept(subprotocol=auth.GUEST_WS_PROTOCOL if guest_bearer else None)
     preview_logger.info(f"[WS Proxy] Client connected, proxying to localhost:{port}")
     
     local_ws = None
@@ -3861,6 +3872,16 @@ def public_upload_prefix(port: int) -> str:
     return f"pub{int(port)}_"
 
 
+def _node_upload_error(response) -> HTTPException:
+    """Lỗi từ /upload-files của preview. 4xx = không còn hộp chọn file nào đang mở (đã đóng,
+    trang đã chuyển) → 409 kèm câu dễ hiểu. KHÔNG trả 502 cho trường hợp này: qua tunnel,
+    Cloudflare thay mọi 502 của máy bằng trang lỗi HTML không có header CORS, nên trang Town
+    chỉ thấy «Failed to fetch» (thử bằng trình duyệt thật 28/9)."""
+    if 400 <= response.status_code < 500:
+        return HTTPException(409, "Không có hộp chọn file nào đang mở — bấm lại nút tải lên trên trang rồi chọn file.")
+    return HTTPException(502, f"Node preview server returned {response.status_code}: {response.text}")
+
+
 @router.post("/preview/upload/{port}")
 async def api_preview_upload_files(request: Request, port: int, files: List[UploadFile] = File(...)):
     """Upload files for the file chooser dialog of browser at port."""
@@ -3910,7 +3931,7 @@ async def api_preview_upload_files(request: Request, port: int, files: List[Uplo
         if response.status_code == 200:
             return response.json()
         else:
-            raise HTTPException(502, f"Node preview server returned {response.status_code}: {response.text}")
+            raise _node_upload_error(response)
     except Exception as e:
         if os.path.exists(batch_dir):
             try:
@@ -4035,7 +4056,7 @@ async def api_preview_upload_finalize(request: Request, port: int, req: UploadFi
         )
         if response.status_code == 200:
             return response.json()
-        raise HTTPException(502, f"Node preview server returned {response.status_code}: {response.text}")
+        raise _node_upload_error(response)
     except Exception as e:
         try:
             shutil.rmtree(batch_dir)

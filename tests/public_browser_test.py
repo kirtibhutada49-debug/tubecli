@@ -241,6 +241,79 @@ _ws = _ws[_ws.index("for task in pending:"):_ws.index("except ImportError:")]
 check("preview tắt → proxy ĐÓNG socket khách (4001 khi đã thu quyền)",
       "websocket.close(code=_code" in _ws and "4001" in _ws)
 
+# ── Token khách TƯỜNG MINH (không cookie) — Town ở tubecli.app khác site với tunnel ──
+# User 28/9: bấm 🌐 trên tubecli.app là hỏng (cookie khách không đặt/gửi được chéo site).
+# Chủ duyệt đúng hai Origin tubecli.app + cloud.tubecreate.com cho lượt khách công khai.
+_pub_tok = auth.mint_guest_token(PUB, 600)["guest_token"]
+_ws_tok = auth.mint_guest_token({"workspace": "w1", "profiles": ["shared"], "access": "control"}, 600)["guest_token"]
+check("token công khai trong header → nhận", auth.public_bearer_scope(_pub_tok) == PUB)
+check("token khách workspace trong header → KHÔNG nhận (vẫn đi cookie)", auth.public_bearer_scope(_ws_tok) is None)
+check("token méo / rỗng → không nhận",
+      auth.public_bearer_scope("gt_abc") is None and auth.public_bearer_scope("") is None
+      and auth.public_bearer_scope(_pub_tok + " ") is None)
+check("subprotocol WS: nhãn tubecli.guest + token → lấy được token",
+      auth.ws_guest_bearer({"sec-websocket-protocol": f"tubecli.guest, {_pub_tok}"}) == _pub_tok)
+check("subprotocol thiếu nhãn tubecli.guest → bỏ qua", auth.ws_guest_bearer({"sec-websocket-protocol": _pub_tok}) == "")
+og._learned_hosts.clear()
+check("Origin khách công khai: tubecli.app + cloud.tubecreate.com (https) → qua",
+      og.public_guest_origin_ok("https://tubecli.app") and og.public_guest_origin_ok("https://cloud.tubecreate.com"))
+check("Origin khách công khai: http://tubecli.app, evil.com, market.tubecreate.com → chặn",
+      not og.public_guest_origin_ok("http://tubecli.app") and not og.public_guest_origin_ok("https://evil.com")
+      and not og.public_guest_origin_ok("https://market.tubecreate.com"))
+check("hai Origin ấy KHÔNG thành Origin tin cậy chung (cookie của chủ không đổi luật)",
+      not og.is_origin_allowed("https://tubecli.app") and not og.is_origin_allowed("https://cloud.tubecreate.com"))
+
+
+def _req_h(method, path, headers):
+    from starlette.requests import Request
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+    raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    return Request({"type": "http", "method": method, "path": path, "headers": raw, "query_string": b"",
+                    "client": ("1.2.3.4", 5000)}, receive)
+
+
+async def _through(mw, method, path, headers):
+    hit = []
+
+    async def nxt(_r):
+        hit.append(1)
+        from starlette.responses import Response
+        return Response("ok")
+    res = await mw(_req_h(method, path, headers), nxt)
+    return bool(hit), res.status_code
+
+
+_up = "/api/v1/browser/preview/upload/41001"
+_pf = {"cf-connecting-ip": "5.6.7.8", "host": "tuan4-13.tubecreate.com"}
+check("Origin tubecli.app + token công khai → qua luật Origin",
+      asyncio.run(_through(server._guard_cross_origin, "POST", _up,
+                           {**_pf, "origin": "https://tubecli.app", auth.GUEST_HEADER: _pub_tok}))[0])
+check("Origin evil.com + token công khai → 403",
+      asyncio.run(_through(server._guard_cross_origin, "POST", _up,
+                           {**_pf, "origin": "https://evil.com", auth.GUEST_HEADER: _pub_tok})) == (False, 403))
+check("Origin tubecli.app KHÔNG kèm token → 403 như cũ",
+      asyncio.run(_through(server._guard_cross_origin, "POST", _up, {**_pf, "origin": "https://tubecli.app"})) == (False, 403))
+check("Origin tubecli.app + token WORKSPACE trong header → 403",
+      asyncio.run(_through(server._guard_cross_origin, "POST", _up,
+                           {**_pf, "origin": "https://tubecli.app", auth.GUEST_HEADER: _ws_tok})) == (False, 403))
+check("gate đăng nhập: token header → xem ảnh preview cô lập",
+      asyncio.run(_through(server._require_login, "GET", "/api/v1/browser/preview/screenshot/41001",
+                           {**_pf, auth.GUEST_HEADER: _pub_tok}))[0])
+check("gate đăng nhập: token header vẫn KHÔNG ra ngoài phạm vi (profiles) → 403",
+      asyncio.run(_through(server._require_login, "GET", "/api/v1/browser/profiles",
+                           {**_pf, auth.GUEST_HEADER: _pub_tok})) == (False, 403))
+_rt2 = open(os.path.join(_root, "tubecli", "extensions", "browser", "routes.py"), encoding="utf-8").read()
+_ws2 = _rt2[_rt2.index("async def ws_preview_proxy"):_rt2.index("preview_logger.info(f\"[WS Proxy] Client connected")]
+check("WS: token trong subprotocol chỉ nhận qua public_bearer_scope + trả lại NHÃN, không trả token",
+      "public_bearer_scope(_bearer)" in _ws2 and "subprotocol=auth.GUEST_WS_PROTOCOL if guest_bearer" in _ws2)
+
+_e4 = br._node_upload_error(types.SimpleNamespace(status_code=400, text="File chooser not active"))
+_e5 = br._node_upload_error(types.SimpleNamespace(status_code=500, text="boom"))
+check("chưa mở hộp chọn file → 409 (502 bị Cloudflare thay bằng trang HTML không CORS)",
+      _e4.status_code == 409 and _e5.status_code == 502)
+
 shutil.rmtree(_tmp, ignore_errors=True)
 print(f"\n{passed} pass, {failed} fail")
 sys.exit(1 if failed else 0)

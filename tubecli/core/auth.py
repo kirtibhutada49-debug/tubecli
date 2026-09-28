@@ -515,6 +515,43 @@ def guest_scope_for(token: Optional[str]) -> Optional[dict]:
     return scope if isinstance(scope, dict) else None
 
 
+# Token khách đi TƯỜNG MINH thay cho cookie — CHỈ cho phiên CÔNG KHAI (skill browser.remote).
+# Town ở tubecli.app, tunnel ở *.tubecreate.com: khác site ⇒ cookie tubecli_guest không đặt/
+# gửi được (lần đầu còn vấp CORS «*» + credentials) — người xem bấm là hỏng (user 28/9).
+# Origin của lượt này vẫn bị soát: origin_guard.public_guest_origin_ok.
+GUEST_HEADER = "x-tubecli-guest"
+GUEST_WS_PROTOCOL = "tubecli.guest"
+
+
+def _is_guest_token_shape(token) -> bool:
+    t = str(token or "")
+    body = t[len(GUEST_TOKEN_PREFIX):]
+    return (t.startswith(GUEST_TOKEN_PREFIX) and 20 <= len(body) <= 64
+            and all(c.isascii() and (c.isalnum() or c in "-_") for c in body))
+
+
+def public_bearer_scope(token: Optional[str]) -> Optional[dict]:
+    """Scope của token khách gửi tường minh — chỉ khi là phiên công khai; khác thì None.
+    Khách workspace (share Nhóm) vẫn đi cookie như cũ."""
+    if not _is_guest_token_shape(token):
+        return None
+    sc = guest_scope_for(token)
+    return sc if isinstance(sc, dict) and sc.get("public") else None
+
+
+def ws_guest_bearer(headers) -> str:
+    """Token khách trong Sec-WebSocket-Protocol: trang mở new WebSocket(url, ['tubecli.guest',
+    token]) — trình duyệt không cho đặt header nào khác khi bắt tay WS. Phải kèm nhãn
+    tubecli.guest; server trả lại đúng nhãn đó, không bao giờ trả token."""
+    try:
+        protos = [p.strip() for p in str(headers.get("sec-websocket-protocol") or "").split(",")]
+    except Exception:
+        return ""
+    if GUEST_WS_PROTOCOL not in protos:
+        return ""
+    return next((p for p in protos if _is_guest_token_shape(p)), "")
+
+
 def _canon_fs(path_str: str) -> str:
     """Canonical hoá path GIỐNG HỆT thứ file-manager route THỰC SỰ chạm.
 

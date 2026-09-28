@@ -182,6 +182,22 @@ def _host_of(value: str) -> str:
         return ""
 
 
+# Trang Town (skill browser.remote) chạy ở đúng hai tên miền này — chủ duyệt 28/9. Khác site
+# với tunnel nên máy không bao giờ «học» được chúng qua đăng nhập; chỉ lượt KHÁCH CÔNG KHAI
+# mang token tường minh mới được nhận thêm hai Origin này, không mở gì cho cookie của chủ.
+PUBLIC_GUEST_ORIGIN_HOSTS = {"tubecli.app", "cloud.tubecreate.com"}
+
+
+def public_guest_origin_ok(origin: str) -> bool:
+    """Origin cho lượt khách công khai: không có Origin (không phải trình duyệt), Origin máy
+    đã tin sẵn, hoặc đúng một trong PUBLIC_GUEST_ORIGIN_HOSTS qua https."""
+    if not origin:
+        return True
+    if is_origin_allowed(origin):
+        return True
+    return str(origin).lower().startswith("https://") and _host_of(origin) in PUBLIC_GUEST_ORIGIN_HOSTS
+
+
 def is_origin_allowed(origin: str, host: str = "") -> bool:
     """Bản trả bool, không raise — dùng cho middleware bọc toàn bộ API surface.
 
