@@ -172,7 +172,7 @@ check("vector chữ ký chung JS↔Python (cloud tests/public_agents_test.mjs)",
 calls = []
 
 
-async def fake_handler(text):
+async def fake_handler(text, opts=None):
     calls.append(text)
     if text == "boom":
         raise RuntimeError("secret internal path C:/Users/owner")

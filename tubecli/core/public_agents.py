@@ -130,6 +130,12 @@ async def _xiangqi_move(text: str, opts: Optional[Dict[str, Any]] = None) -> Dic
     return await resolve(text, opts)
 
 
+async def _douyin_reup(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from tubecli.core.public_reup import resolve
+
+    return await resolve(text, opts)
+
+
 PUBLIC_SKILLS: Dict[str, PublicSkill] = {
     s.id: s for s in (
         PublicSkill("douyin.resolve", "douyin_downloader", _douyin_resolve),
@@ -148,6 +154,9 @@ PUBLIC_SKILLS: Dict[str, PublicSkill] = {
         # Cờ tướng: engine luật nằm ngay trong Arena (engine/xiangqi_game.py); đầu vào
         # còn kèm danh sách nước hợp lệ do trọng tài cloud dựng — hai tầng kiểm.
         PublicSkill("xiangqi.move", "ai_arena", _xiangqi_move, max_input=6000),
+        # Reup Douyin: job hai pha (link → thẻ tiến độ; {"job"} → trạng thái/kết quả) —
+        # xem core/public_reup.py. Chuỗi tải→phụ đề→lồng tiếng chạy nền trên máy.
+        PublicSkill("douyin.reup", "douyin_downloader", _douyin_reup, max_input=600),
     )
 }
 
