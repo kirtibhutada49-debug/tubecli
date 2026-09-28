@@ -2,12 +2,14 @@
 «làm dễ vừa và khó đi, dễ thì cho AI đánh cho vui»).
 
   · easy   — model tự chọn trong danh sách nước hợp lệ (đánh cho vui, hay đi nước ngộ).
-  · medium — engine alpha-beta của Arena đưa TOP-5, model chọn một + bình luận.
-  · hard   — engine đánh thẳng nước mạnh nhất, model chỉ được nhờ viết MỘT câu bình luận.
+  · medium — Fairy-Stockfish nghĩ 4 lớp, lấy các nước kém nước tốt nhất ≤ 1.5 tốt (điểm
+               THẬT qua MultiPV), model chọn một (thứ tự xáo) + bình luận.
+  · hard   — Fairy-Stockfish sức mạnh đầy đủ 1.5 s/nước, model chỉ viết MỘT câu bình luận.
 
-Sức cờ nằm ở engine (arena /xiangqi/best — alpha-beta thuần Python, không cài gì thêm),
-model chỉ còn vai «giọng nói». Cloud vẫn là trọng tài cuối: mọi nước trả về đều phải nằm
-trong danh sách hợp lệ cloud gửi kèm.
+Engine: core/xq_engine.py (Fairy-Stockfish XQ, tự tải lần đầu). Máy không chạy được nó
+(ARM/macOS, tải hỏng) → lùi về engine alpha-beta thuần Python của Arena (/xiangqi/best) —
+28/9 đo: engine đó dừng ở lớp 5 cho cả hai mức nên Vừa và Khó từng đánh y hệt nhau.
+Cloud vẫn là trọng tài cuối: mọi nước trả về đều phải nằm trong danh sách hợp lệ gửi kèm.
 
 Đường gọi: loopback vào extension AI Arena (external — không import module được):
   /api/v1/arena/xiangqi/best  → top nước theo engine;
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 import time
 from functools import partial
@@ -27,6 +30,9 @@ from tubecli.core.public_agents import PublicSkillError
 
 XQ_BUDGET_SEC = 34             # trong trần 40 s của invoke
 LEVELS = ("easy", "medium", "hard")
+HARD_MS = 1500                 # Fairy-Stockfish nghĩ 1.5 s ≈ độ sâu 19 — mạnh hơn người rất xa
+MEDIUM_DEPTH = 4               # Vừa: nghĩ 4 lớp…
+MEDIUM_MARGIN = 150            # …chọn trong các nước kém nước tốt nhất ≤ 1.5 tốt
 _FEN_RE = re.compile(r"^[rnbakcpRNBAKCP1-9]+(/[rnbakcpRNBAKCP1-9]+){9} [wb]( .*)?$")
 _MOVE_RE = re.compile(r"^[a-i][0-9][a-i][0-9]$")
 
@@ -72,6 +78,34 @@ def _play_turn(agent_id: str, game_id: str, prompt: str, fen: str, turn: str,
         "prompt": prompt,
         "game_state": {"fen": fen, "board": fen, "current_turn": turn, "move_history": history},
     }, timeout)
+
+
+_PIECE_NAMES = {"r": "chariot", "n": "horse", "b": "elephant", "a": "advisor", "k": "general",
+                "c": "cannon", "p": "soldier"}
+
+
+def describe_move(fen: str, move: str) -> str:
+    """«your cannon h7→h5, capturing a soldier» — model chỉ thấy FEN thì hay tả nhầm quân
+    (28/9: pháo đi mà bình «đẩy tốt»)."""
+    rows = fen.split(" ")[0].split("/")          # hàng 9 (trên cùng) → hàng 0
+
+    def at(sq: str) -> str:
+        x, y = "abcdefghi".index(sq[0]), int(sq[1])
+        col = 0
+        for ch in rows[9 - y]:
+            if ch.isdigit():
+                col += int(ch)
+            else:
+                if col == x:
+                    return ch
+                col += 1
+        return ""
+    try:
+        me, cap = at(move[:2]), at(move[2:])
+    except (ValueError, IndexError):
+        return "a move"
+    s = f"your {_PIECE_NAMES.get(me.lower(), 'piece')} {move[:2]}→{move[2:]}"
+    return s + (f", capturing a {_PIECE_NAMES.get(cap.lower(), 'piece')}" if cap else "")
 
 
 def _mv(data: Dict[str, Any]) -> Tuple[str, str]:
@@ -139,14 +173,36 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
         raise PublicSkillError("chess_failed", status=502)
 
     # ── VỪA / KHÓ: engine tính trước ──────────────────────────────────────────
-    ms = 2800 if level == "hard" else 2200
-    try:
-        top = await asyncio.wait_for(
-            asyncio.to_thread(partial(_engine_top, fen, 1 if level == "hard" else 5, ms, 10)),
-            timeout=min(left(), 12))
-    except asyncio.TimeoutError:
-        raise PublicSkillError("timeout", status=504)
-    top = [(m, s) for m, s in top if m in allowed]
+    # Fairy-Stockfish (core/xq_engine.py) khi máy có; lần đầu tự tải ~24 MB — chờ tối đa
+    # 20 s, quá thì lượt này lùi về engine Python của Arena (lượt sau đã có engine thật).
+    from tubecli.core import xq_engine
+
+    top: List[Tuple[str, int]] = []
+    if await asyncio.to_thread(xq_engine.ensure, max(0.0, min(left() - 14, 20))):
+        if level == "hard":
+            # Khó: sức mạnh ĐẦY ĐỦ, nghĩ 1.5 s (đo: độ sâu ~19)
+            args = dict(multipv=1, movetime_ms=HARD_MS, timeout=6)
+        else:
+            # Vừa: nghĩ nông (lớp MEDIUM_DEPTH) nhưng điểm THẬT cho 5 nước (MultiPV) — model
+            # chọn trong các nước kém nước tốt nhất ≤ MEDIUM_MARGIN, nên đánh được mà có sơ hở
+            args = dict(multipv=5, depth=MEDIUM_DEPTH, timeout=6)
+        try:
+            top = await asyncio.wait_for(asyncio.to_thread(partial(xq_engine.analyse, fen, **args)),
+                                         timeout=min(left(), 10))
+        except asyncio.TimeoutError:
+            top = []
+        top = [(m, s) for m, s in top if m in allowed]
+        if level == "medium" and top:
+            top = [(m, s) for m, s in top if s >= top[0][1] - MEDIUM_MARGIN]
+    if not top:
+        ms = 2800 if level == "hard" else 2200
+        try:
+            top = await asyncio.wait_for(
+                asyncio.to_thread(partial(_engine_top, fen, 1 if level == "hard" else 5, ms, 10)),
+                timeout=min(left(), 12))
+        except asyncio.TimeoutError:
+            raise PublicSkillError("timeout", status=504)
+        top = [(m, s) for m, s in top if m in allowed]
     if not top:
         raise PublicSkillError("chess_failed", status=502)
 
@@ -157,7 +213,8 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
         if left() > 6:
             say_prompt = (
                 "You are a Xiangqi (Chinese Chess) player. In this position (FEN): "
-                f"{fen}\nyou just decided to play the move {move} (from-to squares).\n"
+                f"{fen}\nyou just decided to play the move {move} (from-to squares) — "
+                f"{describe_move(fen, move)}.\n"
                 'Respond with ONLY a JSON object: {"chat": "<one short confident comment '
                 'about this move, max 120 chars>"}'
             )
@@ -171,16 +228,18 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
                 chat = ""
         return {"kind": "xqmove", "move": move, "chat": chat, "level": level}
 
-    # medium: model chọn MỘT trong top-5 của engine + bình luận.
+    # medium: model chọn MỘT trong các nước ứng viên + bình luận. Xáo thứ tự và KHÔNG ghi
+    # «best first»: bản cũ ghi vậy nên model luôn chọn nước đầu = y hệt mức Khó.
     cand = [m for m, _ in top]
+    shown = random.sample(cand, len(cand))
     prompt = (
         "You are playing Chinese Chess (Xiangqi) as the "
         + ("RED" if turn == "w" else "BLACK") + " side.\n"
         f"Position (FEN): {fen}\n"
         f"Recent moves: {' '.join(history[-16:]) or '(game start)'}\n"
-        "Your engine assistant computed the 5 STRONGEST candidate moves (best first): "
-        + " ".join(cand) + "\n"
-        "Pick ONE of these candidate moves only.\n"
+        "Your engine assistant says these moves are all playable (in no particular order): "
+        + " ".join(shown) + "\n"
+        "Pick ONE of them that fits your own style and plan.\n"
         'Respond with ONLY a JSON object: {"move": "<one of the candidates>", '
         '"chat": "<one short strategic comment, max 120 chars>"}'
     )
@@ -201,5 +260,6 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
         if move in cand_set:
             return {"kind": "xqmove", "move": move, "chat": chat, "level": level}
         prompt += f'\n\n[SYSTEM: "{move[:20]}" is not one of the candidates. Pick one candidate.]'
-    # Model lề mề/nói bậy: engine tự đi nước tốt nhất, không bao giờ «đi bừa».
-    return {"kind": "xqmove", "move": cand[0], "chat": "", "level": level}
+    # Model lề mề/nói bậy: bốc một nước trong nhóm ứng viên (đều đánh được) — không «đi bừa»,
+    # cũng không lặng lẽ biến thành mức Khó.
+    return {"kind": "xqmove", "move": random.choice(cand), "chat": "", "level": level}
