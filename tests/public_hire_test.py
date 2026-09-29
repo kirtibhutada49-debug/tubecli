@@ -121,6 +121,13 @@ check("receive: giọng + tiêu đề + tỉ lệ hợp lệ lưu vào việc, t
       ph._jobs["v" * 12]["voice"] == "BV075_streaming" and ph._jobs["v" * 12]["title"] == "Pin thể rắn 2027"
       and ph._jobs["v" * 12]["ratio"] == "9:16",
       ph._jobs.get("v" * 12))
+# Độ dài máy nhắm (29/9: «auto thời lượng theo text, không ép»): 0 = tự động; vượt số phút đã
+# trả → kẹp; không gửi / rác → như cũ (nhắm đúng minutes).
+for _j, _t in (("ta" * 6, 0), ("tb" * 6, 7), ("tc" * 6, None), ("td" * 6, "abc"), ("te" * 6, 2)):
+    rc({**base, "job": _j, **({} if _t is None else {"target": _t})})
+check("receive: target 0 = tự động; 7 > 3 phút đã trả → 3; thiếu/rác → minutes; 2 → 2",
+      [ph._jobs.get(j, {}).get("target") for j in ("ta" * 6, "tb" * 6, "tc" * 6, "td" * 6, "te" * 6)] == [0, 3, 3, 3, 2],
+      [ph._jobs.get(j, {}).get("target") for j in ("ta" * 6, "tb" * 6, "tc" * 6, "td" * 6, "te" * 6)])
 rc({**base, "job": "w" * 12, "voice": "bậy bạ có dấu!", "title": "", "ratio": "4:3"})
 check("receive: giọng/tỉ lệ sai dạng → bỏ lặng lẽ, việc vẫn nhận",
       ph._jobs["w" * 12]["voice"] == "" and ph._jobs["w" * 12]["ratio"] == "" and ("w" * 12) in _ran)
@@ -243,6 +250,18 @@ disk = json.load(open(os.path.join(_tmp, "job1ok123456.json"), encoding="utf-8")
 check("_save lọc khoá «_»: sổ trên đĩa ghi ĐƯỢC dù job mang _task, không còn báo hỏng oan",
       disk["status"] in ("reported", "delivered", "ready") and "_task" not in disk
       and disk["seconds"] == 95, disk.get("status"))
+
+# Độ dài TỰ ĐỘNG (target 0): KHÔNG đặt target_words — pipeline đo chính bài dán; bài dài hơn
+# số phút khách đã trả (3 phút = 450 chữ) thì kẹp về trần. Mốc cụ thể → target × 150.
+for _code, _extra, _want in (
+        ("jobauto00001", {"target": 0, "brief": "ý tưởng ngắn về số pi"}, None),
+        ("jobauto00002", {"target": 0, "brief": " ".join(["chữ"] * 500)}, 450),
+        ("jobauto00003", {"target": 2}, 300),
+        ("jobauto00004", {}, 450)):                  # sổ việc trước .186: không có khoá target → như cũ
+    setup_run()
+    state["phase"] = 0
+    asyncio.run(run_fast(_code, **_extra))
+    check(f"_run {_code}: target_words = {_want}", seen_opts.get("target_words") == _want, seen_opts)
 
 # task hỏng → failed
 def fake_http_fail(path):

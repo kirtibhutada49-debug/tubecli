@@ -193,9 +193,16 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
         if code in _jobs:            # cloud gọi lại (mạng chớp) — không mở việc thứ hai
             return {"ok": True, "job": code}
         minutes = max(1, min(60, int(payload.get("minutes") or 0) or 10))
+        # Độ dài MÁY NHẮM (cloud ≥ 29/9): 0 = TỰ ĐỘNG theo nội dung — user: «dựa vào text đầu vào
+        # để tạo video auto thời lượng chứ không ép thời lượng»; n = nhắm n phút (≤ minutes, số
+        # phút khách đã trả). Cloud cũ không gửi → nhắm đúng `minutes` như trước.
+        try:
+            target = max(0, min(minutes, int(payload["target"]))) if payload.get("target") not in (None, "") else minutes
+        except (TypeError, ValueError):
+            target = minutes
         job = {"code": code, "agent_id": entry["agent_id"], "preset": preset, "brief": brief,
                "unit": "minute" if payload.get("unit") == "minute" else "job",
-               "minutes": minutes, "price": int(payload.get("price") or 0),
+               "minutes": minutes, "target": target, "price": int(payload.get("price") or 0),
                "voice": voice, "title": title, "ratio": ratio,
                "status": "accepted", "task_id": "", "files": [], "paths": [],
                "seconds": 0, "at": time.time()}
@@ -265,8 +272,20 @@ async def _run(code: str) -> None:
         # Độ dài đặt hàng → cỡ kịch bản (~150 chữ/phút — xem content_video). KHÔNG đăng,
         # KHÔNG Drive: sản phẩm giao cho KHÁCH, không phải kênh của chủ máy.
         options = {"source_text": job["brief"], "preset": job["preset"],
-                   "target_words": max(120, min(9000, job["minutes"] * 150)),
                    "job_label": "Việc thuê từ Town"}
+        tgt = int(job.get("target", job["minutes"]) or 0)     # sổ việc trước .186 không có khoá → như cũ
+        cap = max(120, min(9000, job["minutes"] * 150))
+        if tgt > 0:
+            options["target_words"] = max(120, min(9000, tgt * 150))
+        else:
+            # TỰ ĐỘNG: KHÔNG đặt target_words — pipeline đo chính bài dán (resolve_words → "content")
+            # và giữ câu của khách. Chỉ kẹp khi bài dài hơn số phút khách đã trả (trần của chủ).
+            try:
+                from tubecli.extensions.content_video.pipeline import content_words
+            except ImportError:
+                content_words = lambda t: len(str(t or "").split())     # noqa: E731
+            if content_words(job["brief"]) > cap:
+                options["target_words"] = cap
         # Khách chọn giọng/tiêu đề trên form thuê → đè lên mặc định của mẫu. Giọng là
         # capcut_speaker của CHÍNH máy này (khách chọn từ catalog); không chọn thì thôi.
         if job.get("voice"):

@@ -3340,6 +3340,10 @@ def _step_images(state: Dict, options: Dict) -> None:
     res = _post(f"/api/v1/studio/episodes/{ep_id}/gen-images", body, timeout=60)
     if not res.get("task_id"):
         raise RuntimeError(f"gen-images did not start: {str(res)[:200]}")
+    if res.get("skipped") == "kit_draws_itself":
+        # Mẫu tự vẽ mọi khung (t2: mã canvas / cảnh dựng sẵn) — không có ảnh nào để tạo (29/9/2026, task #145).
+        state["_say"]("images", "running", "this template draws every frame itself — no pictures to generate")
+        return
     # Shot vắng trong video = KHÔNG có prompt để vẽ VÀ cũng không có hình nào sẵn. Trước đây chỉ đếm
     # "không có prompt", nên dây chuyền Diễn giải bị báo oan: nhịp lấy tranh từ kho (`lib:`) hay mượn
     # tranh nhịp khác (`@N`) vốn không cần prompt — tập 454 (20/9/2026) bị kêu «33 shot sẽ thiếu» trong
