@@ -100,11 +100,14 @@ class MarketService:
         mode: str = "public",
         page: int = 1,
         limit: int = 20,
+        kind: str = None,
     ) -> Dict:
         """Fetch marketplace items with filters (non-blocking)."""
         url = f"{self.api_base}/list.php"
         params = {"page": page, "limit": limit, "sort": sort, "mode": mode}
         if category: params["category"] = category
+        # Mẫu chia hai loại (29/9): kind=content = mẫu video, kind=layout = mẫu bìa.
+        if category == "template" and kind in ("content", "layout"): params["kind"] = kind
         if search: params["search"] = search
         if min_price is not None: params["min_price"] = min_price
         if max_price is not None: params["max_price"] = max_price

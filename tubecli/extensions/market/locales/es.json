@@ -109,5 +109,13 @@
   "auth.or_email": "o usa tu correo",
   "auth.sso_waiting": "Esperando la ventana de inicio de sesión…",
   "auth.sso_popup_blocked": "El navegador bloqueó la ventana emergente: permítela e inténtalo de nuevo.",
-  "auth.sso_ok": "Sesión iniciada con tu cuenta Cloud"
+  "auth.sso_ok": "Sesión iniciada con tu cuenta Cloud",
+  "market.type_all": "Todo",
+  "market.type_extension": "🧩 Extensiones",
+  "market.type_tpl_video": "🎬 Plantillas de vídeo",
+  "market.type_tpl_layout": "🖼️ Diseños de portada",
+  "market.type_skill": "⚡ Habilidades",
+  "card.tpl_video": "Plantilla de vídeo",
+  "card.tpl_layout": "Diseño de portada",
+  "card.open_studio": "Abrir Content Studio"
 }

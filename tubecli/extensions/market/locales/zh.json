@@ -109,5 +109,13 @@
   "auth.or_email": "或使用邮箱",
   "auth.sso_waiting": "等待登录窗口…",
   "auth.sso_popup_blocked": "浏览器拦截了弹出窗口 — 请允许后重试。",
-  "auth.sso_ok": "已使用 Cloud 账号登录"
+  "auth.sso_ok": "已使用 Cloud 账号登录",
+  "market.type_all": "全部",
+  "market.type_extension": "🧩 扩展",
+  "market.type_tpl_video": "🎬 视频模板",
+  "market.type_tpl_layout": "🖼️ 封面版式",
+  "market.type_skill": "⚡ 技能",
+  "card.tpl_video": "视频模板",
+  "card.tpl_layout": "封面版式",
+  "card.open_studio": "打开 Content Studio"
 }

@@ -1589,3 +1589,33 @@ dialog.topup-dialog.topup-compact .topup-footer {
     font-size: 0.72rem;
 }
 
+/* ── Loại hàng (29/9/2026): chip Extension · Mẫu video · Mẫu bìa · Skill trên đầu lưới ── */
+.vsx-type-chips { display: flex; gap: 8px; flex-wrap: wrap; padding: 14px 24px 0; }
+.vsx-type-chip {
+    appearance: none; cursor: pointer; font: inherit; font-size: 0.85rem; font-weight: 600;
+    padding: 6px 14px; border-radius: 999px; color: var(--text-muted);
+    border: 1px solid var(--border); background: var(--mk-w05, rgba(255,255,255,.05));
+    transition: background .15s, border-color .15s, color .15s;
+}
+.vsx-type-chip:hover { color: var(--text); border-color: rgba(82,118,235,.45); }
+.vsx-type-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ── Thẻ MẪU: ảnh bìa lớn (link tuyệt đối từ cloud), rê chuột phát ảnh động dọc ── */
+.card-tpl-cover {
+    position: relative; margin: 22px -4px 12px; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden;
+    background: #111114; border: 1px solid var(--border);
+}
+.card-tpl-cover img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.card-tpl-cover .tpl-still { object-fit: cover; transition: transform .6s ease; }
+.card-tpl-cover .tpl-anim { object-fit: contain; opacity: 0; transition: opacity .25s; background: #0b0b0f; }
+.vsx-card-tpl:hover .tpl-still { transform: scale(1.06); }
+.vsx-card-tpl.playing .tpl-anim[src] { opacity: 1; }
+.card-tpl-cover .tpl-hint {
+    position: absolute; right: 8px; bottom: 8px; width: 24px; height: 24px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 10px; color: #fff; background: rgba(5,8,18,.7);
+    border: 1px solid rgba(255,255,255,.2); transition: opacity .2s;
+}
+.vsx-card-tpl.playing .tpl-hint { opacity: 0; }
+.vsx-card-tpl .card-header .card-icon { display: none; }
+.card-badge.template { background: rgba(255,194,71,.16); color: #ffd98a; border-color: rgba(255,194,71,.35); }
+@media (prefers-reduced-motion: reduce) { .vsx-card-tpl:hover .tpl-still { transform: none; } }

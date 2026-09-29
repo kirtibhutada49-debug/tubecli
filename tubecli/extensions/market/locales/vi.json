@@ -109,5 +109,13 @@
   "auth.or_email": "hoặc dùng email",
   "auth.sso_waiting": "Đang chờ cửa sổ đăng nhập…",
   "auth.sso_popup_blocked": "Trình duyệt chặn cửa sổ bật lên — hãy cho phép rồi thử lại.",
-  "auth.sso_ok": "Đã đăng nhập bằng tài khoản Cloud"
+  "auth.sso_ok": "Đã đăng nhập bằng tài khoản Cloud",
+  "market.type_all": "Tất cả",
+  "market.type_extension": "🧩 Extension",
+  "market.type_tpl_video": "🎬 Mẫu video",
+  "market.type_tpl_layout": "🖼️ Mẫu bìa",
+  "market.type_skill": "⚡ Skill",
+  "card.tpl_video": "Mẫu video",
+  "card.tpl_layout": "Mẫu bìa",
+  "card.open_studio": "Mở Content Studio"
 }

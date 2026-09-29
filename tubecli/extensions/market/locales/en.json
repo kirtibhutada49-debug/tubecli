@@ -109,5 +109,13 @@
   "auth.or_email": "or use email",
   "auth.sso_waiting": "Waiting for the sign-in window…",
   "auth.sso_popup_blocked": "Your browser blocked the popup — allow it and try again.",
-  "auth.sso_ok": "Signed in with your Cloud account"
+  "auth.sso_ok": "Signed in with your Cloud account",
+  "market.type_all": "All",
+  "market.type_extension": "🧩 Extensions",
+  "market.type_tpl_video": "🎬 Video templates",
+  "market.type_tpl_layout": "🖼️ Cover layouts",
+  "market.type_skill": "⚡ Skills",
+  "card.tpl_video": "Video template",
+  "card.tpl_layout": "Cover layout",
+  "card.open_studio": "Open Content Studio"
 }

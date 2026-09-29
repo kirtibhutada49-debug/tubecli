@@ -109,5 +109,13 @@
   "auth.or_email": "またはメールで",
   "auth.sso_waiting": "ログインウィンドウを待っています…",
   "auth.sso_popup_blocked": "ブラウザがポップアップをブロックしました。許可して再試行してください。",
-  "auth.sso_ok": "Cloud アカウントでログインしました"
+  "auth.sso_ok": "Cloud アカウントでログインしました",
+  "market.type_all": "すべて",
+  "market.type_extension": "🧩 拡張機能",
+  "market.type_tpl_video": "🎬 動画テンプレート",
+  "market.type_tpl_layout": "🖼️ サムネイルレイアウト",
+  "market.type_skill": "⚡ スキル",
+  "card.tpl_video": "動画テンプレート",
+  "card.tpl_layout": "サムネイルレイアウト",
+  "card.open_studio": "Content Studio を開く"
 }

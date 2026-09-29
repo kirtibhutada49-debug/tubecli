@@ -60,11 +60,22 @@
                 <select class="vsx-cat-select" id="catSelect" onchange="setCategoryFromSelect(this.value)">
                     <option value="" data-i18n="market.cat_all">All Categories</option>
                     <option value="extension" data-i18n="market.cat_extension">&#x1F9E9; Extensions</option>
+                    <option value="template:content" data-i18n="market.type_tpl_video">&#x1F3AC; Video templates</option>
+                    <option value="template:layout" data-i18n="market.type_tpl_layout">&#x1F5BC;&#xFE0F; Cover layouts</option>
                     <option value="node" data-i18n="market.cat_node">&#x1F517; Nodes</option>
                     <option value="skill" data-i18n="market.cat_skill">&#x26A1; Skills</option>
                     <option value="model3d" data-i18n="market.cat_model3d">&#x1F3A8; 3D Models</option>
                 </select>
             </div>
+        </div>
+
+        <!-- Loại hàng (29/9/2026: «chợ chưa thấy filter loại extension, template, skill, layout template») -->
+        <div class="vsx-type-chips" id="typeChips" role="group">
+            <button type="button" class="vsx-type-chip active" data-type="" onclick="setType('')" data-i18n="market.type_all">All</button>
+            <button type="button" class="vsx-type-chip" data-type="extension" onclick="setType('extension')" data-i18n="market.type_extension">&#x1F9E9; Extensions</button>
+            <button type="button" class="vsx-type-chip" data-type="template:content" onclick="setType('template:content')" data-i18n="market.type_tpl_video">&#x1F3AC; Video templates</button>
+            <button type="button" class="vsx-type-chip" data-type="template:layout" onclick="setType('template:layout')" data-i18n="market.type_tpl_layout">&#x1F5BC;&#xFE0F; Cover layouts</button>
+            <button type="button" class="vsx-type-chip" data-type="skill" onclick="setType('skill')" data-i18n="market.type_skill">&#x26A1; Skills</button>
         </div>
 
         <!-- Subtitle toolbar -->

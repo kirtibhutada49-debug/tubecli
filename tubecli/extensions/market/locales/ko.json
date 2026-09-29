@@ -109,5 +109,13 @@
   "auth.or_email": "또는 이메일 사용",
   "auth.sso_waiting": "로그인 창을 기다리는 중…",
   "auth.sso_popup_blocked": "브라우저가 팝업을 차단했습니다 — 허용 후 다시 시도하세요.",
-  "auth.sso_ok": "Cloud 계정으로 로그인했습니다"
+  "auth.sso_ok": "Cloud 계정으로 로그인했습니다",
+  "market.type_all": "전체",
+  "market.type_extension": "🧩 확장 기능",
+  "market.type_tpl_video": "🎬 영상 템플릿",
+  "market.type_tpl_layout": "🖼️ 썸네일 레이아웃",
+  "market.type_skill": "⚡ 스킬",
+  "card.tpl_video": "영상 템플릿",
+  "card.tpl_layout": "썸네일 레이아웃",
+  "card.open_studio": "Content Studio 열기"
 }

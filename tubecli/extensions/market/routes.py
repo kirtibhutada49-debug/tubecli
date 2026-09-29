@@ -357,12 +357,13 @@ async def list_items(
     mode: str = "public",
     page: int = 1,
     limit: int = 20,
+    kind: Optional[str] = None,
 ):
-    """List marketplace items with filters."""
+    """List marketplace items with filters. `kind` (chỉ với category=template): content | layout."""
     return await market_service.list_items(
         category=category, search=search, sort=sort,
         min_price=min_price, max_price=max_price, min_rating=min_rating,
-        tags=tags, user_id=user_id, mode=mode, page=page, limit=limit,
+        tags=tags, user_id=user_id, mode=mode, page=page, limit=limit, kind=kind,
     )
 
 
@@ -589,6 +590,10 @@ def _check_item_installed(public_id: str, name: str, category: str) -> dict:
         wf_path = os.path.join(str(DATA_DIR), "workflows", f"{install_id}.json")
         installed = os.path.isfile(wf_path)
         install_path = wf_path
+    elif category == "template":
+        # Mẫu sống trong Content Studio, không phải một thư mục — xem market/templates.py.
+        from tubecli.extensions.market import templates as _tpl
+        return {**_tpl.installed(public_id, name), "install_id": install_id}
 
     if not installed and category == "extension":
         # Extension NẰM TRONG LÕI (Canvas Engine từ 22/9/2026): Chợ vẫn có gói cùng tên cho lõi cũ. Máy này coi nó
@@ -675,6 +680,9 @@ async def uninstall_from_market(public_id: str, item_name: str, category: str):
             os.remove(wf_path)
             return {"status": "success", "message": f"Workflow '{item_name}' uninstalled"}
         raise HTTPException(404, "Workflow not installed")
+
+    elif category == "template":
+        raise HTTPException(409, "Templates live in Content Studio — remove them there (Templates › ⋯ › Delete).")
 
     raise HTTPException(400, "Unknown category")
 
@@ -804,7 +812,8 @@ def _maybe_restart_after_install(was_installed: bool, force: bool,
 
 
 @router.post("/items/{public_id}/install")
-async def install_from_market(public_id: str, req: MarketInstallRequest):
+async def install_from_market(public_id: str, req: MarketInstallRequest,
+                              authorization: Optional[str] = Header(None)):
     """Install a purchased extension from the market.
 
     For category='extension': extracts full extension package to extensions_external/
@@ -843,6 +852,21 @@ async def install_from_market(public_id: str, req: MarketInstallRequest):
                 "path": check["path"],
             },
         )
+
+    # MẪU (29/9/2026: «khi chủ server mua thì tải dữ liệu về máy»): tải gói đã mua bằng khoá Chợ của
+    # người dùng rồi nhập thẳng vào Content Studio của máy — market/templates.py.
+    if category == "template":
+        from tubecli.extensions.market import templates as _tpl
+        version = str(item_data.get("version") or "") if isinstance(item_data, dict) else ""
+        try:
+            out = await _tpl.install(public_id, req.item_name, _get_token(authorization),
+                                     version=version, force_update=req.force_update)
+        except _tpl.TemplateInstallError as e:
+            raise HTTPException(e.status, str(e))
+        n = len(out["saved"])
+        msg = (f"Template '{req.item_name}' installed into Content Studio ({n} template(s) added)" if n
+               else f"Template '{req.item_name}' is already in Content Studio — nothing new to add")
+        return {"status": "success", "type": "template", "message": msg, "open": "content_studio", **out}
 
     if category == "extension" and _builtin_extension(req.item_name) is not None:
         raise HTTPException(

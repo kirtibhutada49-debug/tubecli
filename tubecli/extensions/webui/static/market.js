@@ -181,6 +181,7 @@ let _marketLang = localStorage.getItem('tubecli_lang') || 'en';
 // ── State ──
 const state = {
     category: '',
+    kind: '',          // chỉ với category=template: content (mẫu video) | layout (mẫu bìa)
     search: '',
     sort: 'newest',
     minPrice: null,
@@ -246,6 +247,7 @@ async function loadItems() {
 
     const params = new URLSearchParams();
     if (state.category) params.set('category', state.category);
+    if (state.category === 'template' && state.kind) params.set('kind', state.kind);
     if (state.search) params.set('search', state.search);
     params.set('sort', state.sort);
     params.set('page', state.page);
@@ -363,10 +365,13 @@ function createCard(item, installData) {
         ? `<img src="${escapeHtml(thumbUrl)}" alt="icon" loading="lazy">`
         : (knownLogo ? `<img src="${knownLogo}" alt="icon" loading="lazy">` : (icons[category] || '📦'));
 
-    const featInfo = EXTENSION_FEATURES[extName] || { tagline: item.description || 'No description available', features: ['✨ New', '📦 ' + category] };
+    const isTpl = category === 'template';
+    const tplLabel = item.tpl_kind === 'layout' ? (T('card.tpl_layout') || 'Cover layout') : (T('card.tpl_video') || 'Video template');
+    const featInfo = EXTENSION_FEATURES[extName] || { tagline: item.description || 'No description available',
+        features: isTpl ? ['📐 9:16 · 16:9', '🎞️ Content Studio'] : ['✨ New', '📦 ' + category] };
 
     const card = document.createElement('div');
-    card.className = 'vsx-card';
+    card.className = 'vsx-card' + (isTpl ? ' vsx-card-tpl' : '');
     card.onclick = () => openDetailModal(item.public_id);
 
     const priceBadge = `<span class="card-price ${isFree ? 'free' : 'paid'}">${isFree ? 'Free' : formatCredits(price)}</span>`;
@@ -392,9 +397,17 @@ function createCard(item, installData) {
         quickBtnHtml = `<button id="cardQuickPayBtn_${item.public_id}" class="card-price" style="cursor:pointer; background: #6366f1 linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border:none; font-size:0.78rem; padding:4px 10px;" onclick="event.stopPropagation(); _paymentChoiceTitle='${escapeHtml(item.title).replace(/'/g, '\\\'')}'; startQuickPay('${item.public_id}', ${price})">⚡ Mua ngay</button>`;
     }
 
+    // Ảnh của mẫu nằm trên cloud (thumbnail_url/thumb916/anim là link tuyệt đối — market-cli 29/9).
+    const tplCover = isTpl && item.thumbnail_url ? `
+            <div class="card-tpl-cover">
+                <img class="tpl-still" src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+                ${item.anim ? `<img class="tpl-anim" data-src="${escapeHtml(item.anim)}" alt="">` : ''}
+                ${item.anim ? '<span class="tpl-hint">▶</span>' : ''}
+            </div>` : '';
+
     card.innerHTML = `
         <div class="vsx-card-inner">
-            <span class="card-badge ${category}">${category}</span>
+            <span class="card-badge ${category}">${isTpl ? escapeHtml(tplLabel) : category}</span>${tplCover}
             <div class="card-header">
                 <div class="card-icon">${iconContent}</div>
                 <div class="card-header-info">
@@ -422,13 +435,39 @@ function createCard(item, installData) {
         </div>
     `;
 
+    // Ảnh động chỉ TẢI khi có người rê vào lần đầu (14 GIF ~4 MB — không ai xem thì khỏi kéo về).
+    const anim = card.querySelector('.tpl-anim');
+    if (anim) {
+        card.addEventListener('mouseenter', () => {
+            if (!anim.src) anim.src = anim.dataset.src;
+            card.classList.add('playing');
+        });
+        card.addEventListener('mouseleave', () => card.classList.remove('playing'));
+    }
+
     return card;
 }
 
 // setCategoryFromSelect — syncs the dropdown with category state
 function setCategoryFromSelect(val) {
-    state.category = val;
+    setType(val);
+}
+
+// Loại hàng: '' | extension | skill | node | model3d | template:content | template:layout.
+// Chip trên đầu lưới và ô chọn danh mục là HAI cửa của cùng một bộ lọc — đổi cái này thì cái kia theo.
+function setType(key) {
+    const [cat, kind] = String(key || '').split(':');
+    state.category = cat || '';
+    state.kind = cat === 'template' ? (kind || '') : '';
     state.page = 1;
+    const sel = document.getElementById('catSelect');
+    if (sel) {
+        const want = String(key || '');
+        sel.value = [...sel.options].some((o) => o.value === want) ? want : (cat || '');
+    }
+    document.querySelectorAll('#typeChips .vsx-type-chip').forEach((b) => {
+        b.classList.toggle('active', (b.dataset.type || '') === String(key || ''));
+    });
     applyFilters();
 }
 
@@ -829,12 +868,21 @@ async function buyItemWithCredits(publicId) {
             const data = await res.json();
             if (data.status === 'success' || data.purchased) {
                 if (btn) { btn.innerHTML = '✅ Purchased'; btn.classList.add('free'); }
-                showToast('Mua thành công! Bạn có thể cài đặt ngay.', 'success');
-                // Show Install button
-                const installBtn = document.getElementById('installBtn_' + publicId);
-                if (installBtn) installBtn.style.display = '';
+                showToast('Mua thành công! Đang tải về máy…', 'success');
                 // Refresh balance in header
                 loadStripeBalance();
+                // Mua xong là CÀI LUÔN (user 29/9: «khi chủ server mua thì tải dữ liệu về máy») —
+                // giống luồng PayPal quickpay vốn đã tự bấm Cài sau khi trả tiền.
+                const installBtn = document.getElementById('installBtn_' + publicId);
+                if (installBtn) {
+                    installBtn.style.display = '';
+                    installBtn.click();
+                } else {
+                    try {
+                        const det = await (await fetch(`${API}/items/${publicId}`)).json();
+                        if (det.item) installItem(publicId, det.item.title, det.item.category);
+                    } catch (e) { /* vẫn còn nút Cài trong trang chi tiết */ }
+                }
             } else {
                 const msg = data.message || data.detail || '';
                 if (msg.includes('credit') || msg.includes('insufficient') || res.status === 402) {
@@ -870,7 +918,11 @@ async function installItem(publicId, itemName, category, forceUpdate = false) {
     clearTerm();
     termLog(`Initializing installation for ${itemName}...`, '#88aaff');
 
-    const steps = [
+    const steps = category === 'template' ? [
+        "Downloading the template package from the Market...",
+        "Unpacking scenes, layouts and picture libraries...",
+        "Importing into Content Studio...",
+    ] : [
         "Fetching remote payload from Market API...",
         "Resolving installation paths...",
         "Extracting content into local file system...",
@@ -926,8 +978,9 @@ async function installItem(publicId, itemName, category, forceUpdate = false) {
         if (data.status === 'success') {
             termLog("🎉 Installation Complete!", '#00ff00');
 
-            // Derive extension slug for navigation
-            const extSlug = itemName.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+            // Derive extension slug for navigation — mẫu thì mở Content Studio, nơi nó vừa được cài
+            const extSlug = category === 'template' ? (data.open || 'content_studio')
+                : itemName.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
             const extTabId = 'ext-' + extSlug;
 
             // Refresh sidebar to show the new extension
@@ -946,7 +999,7 @@ async function installItem(publicId, itemName, category, forceUpdate = false) {
                     btn.style.boxShadow = 'none';
                     btn.disabled = true;
                 } else {
-                    btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> Open ${itemName}`;
+                    btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> ${category === 'template' ? (T('card.open_studio') || 'Open Content Studio') : 'Open ' + itemName}`;
                     btn.style.background = '#10b981 linear-gradient(135deg, #22c55e, #10b981)';
                     btn.style.boxShadow = '0 2px 12px rgba(34,197,94,0.25)';
                     btn.disabled = false;

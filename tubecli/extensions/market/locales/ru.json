@@ -109,5 +109,13 @@
   "auth.or_email": "или по электронной почте",
   "auth.sso_waiting": "Ожидание окна входа…",
   "auth.sso_popup_blocked": "Браузер заблокировал всплывающее окно — разрешите его и повторите.",
-  "auth.sso_ok": "Вы вошли через аккаунт Cloud"
+  "auth.sso_ok": "Вы вошли через аккаунт Cloud",
+  "market.type_all": "Все",
+  "market.type_extension": "🧩 Расширения",
+  "market.type_tpl_video": "🎬 Шаблоны видео",
+  "market.type_tpl_layout": "🖼️ Макеты обложек",
+  "market.type_skill": "⚡ Навыки",
+  "card.tpl_video": "Шаблон видео",
+  "card.tpl_layout": "Макет обложки",
+  "card.open_studio": "Открыть Content Studio"
 }
