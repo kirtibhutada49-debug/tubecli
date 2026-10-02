@@ -315,7 +315,14 @@ async function ask(ctx, req) {
       await page.locator(SEL.fileInput).first().setInputFiles(files);
       await sleep(1500);
     }
-    await ta.click();
+    // Ảnh lớn (bảng panorama PNG 2,5 MB — #160, 2/10/2026) tải lên lâu, ô soạn tin bị khoá quá 30 s → có file thì chờ
+    // tới 150 s; vẫn kẹt thì Esc (đóng lớp phủ) rồi ép bấm.
+    try {
+      await ta.click({ timeout: files && files.length ? 150000 : 30000 });
+    } catch {
+      await page.keyboard.press('Escape').catch(() => {});
+      await ta.click({ force: true, timeout: 10000 });
+    }
     await ta.fill(prompt);
     await sleep(200);
     await ta.press('Enter');
