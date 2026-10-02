@@ -216,23 +216,73 @@ install_deps_macos() {
     fi
 }
 
-check_python() {
-    if command_exists python3; then
-        # Check version >= 3.10
-        local py_version
-        py_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-        local major
-        local minor
-        major=$(echo "$py_version" | cut -d. -f1)
-        minor=$(echo "$py_version" | cut -d. -f2)
-        # Must match requires-python in pyproject.toml (>=3.10). Accepting 3.9
-        # here printed a green [OK] and then let pip refuse the package, and
-        # because this check "passed" the brew/apt rescue path below never ran.
-        if [[ "$major" -eq 3 && "$minor" -ge 10 ]]; then
-            echo -e "${GREEN}[OK] Python $py_version found${NC}"
+# PY: the interpreter the rest of this script must use. NOT a hardcoded `python3`:
+# Ubuntu 20.04 keeps python3 at 3.8 forever, so after we install python3.11 the name
+# `python3` still points at 3.8 and every later step would pick the wrong one.
+PY=""
+
+py_ok() {
+    # Im lặng: $1 có phải interpreter chạy được, từ 3.10 trở lên?
+    local v
+    v=$("$1" -c 'import sys; print(sys.version_info[0] * 100 + sys.version_info[1])' 2>/dev/null) || return 1
+    [[ -n "$v" && "$v" -ge 310 ]]
+}
+
+find_python() {
+    # Tìm bản MỚI HƠN nằm cạnh bản của distro trước khi kết luận là thiếu. Nhiều ảnh VPS có
+    # python3.11 trong khi `python3` vẫn là 3.8, mà bản cũ chỉ hỏi đúng `python3` — nên nó tuyên
+    # bố thất bại trên một máy vốn đã đủ điều kiện.
+    local c
+    for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python; do
+        if command_exists "$c" && py_ok "$c"; then
+            PY=$(command -v "$c")
             return 0
         fi
-        echo -e "${YELLOW}[!] Python $py_version found, but TubeCLI needs 3.10 or newer.${NC}"
+    done
+    return 1
+}
+
+check_python() {
+    if find_python; then
+        echo -e "${GREEN}[OK] Python $("$PY" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))') found ($PY)${NC}"
+        return 0
+    fi
+    if command_exists python3; then
+        echo -e "${YELLOW}[!] Python $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || echo '?') found, but TubeCLI needs 3.10 or newer.${NC}"
+    fi
+    return 1
+}
+
+# Cài một Python 3.10+ THẬT trên máy dùng apt. Phải xin bản CÓ SỐ (python3.11…): xin «python3»
+# trên Ubuntu 20.04 là vô nghĩa vì gói đó đã ở bản mới nhất mà vẫn là 3.8.
+install_python_apt() {
+    local v
+    # Repo của chính distro trước (22.04 có 3.10, 24.04 có 3.12) — khỏi cần PPA.
+    for v in 3.12 3.11 3.10; do
+        echo -e "${YELLOW}[*] Trying python$v from the distribution repositories...${NC}"
+        if $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q "python$v" "python$v-venv" >/dev/null 2>&1; then
+            find_python && return 0
+        fi
+    done
+    # Ubuntu 20.04 không có bản nào trong repo gốc → PPA deadsnakes. Debian không có PPA này,
+    # nên ở đó ta không thử và để phần báo lỗi nói ra yêu cầu tối thiểu.
+    if grep -qi ubuntu /etc/os-release 2>/dev/null; then
+        # deadsnakes đã BỎ focal (20.04): Packages.gz của nó còn 20 byte — gzip rỗng. Thử PPA ở
+        # đó là chắc chắn trượt, nên chặn trước và để phần báo lỗi nói đúng cách chữa.
+        if grep -qE 'VERSION_ID="?20\.04' /etc/os-release 2>/dev/null; then
+            echo -e "${YELLOW}[*] Ubuntu 20.04: deadsnakes no longer builds for this release — skipping the PPA.${NC}"
+            return 1
+        fi
+        echo -e "${YELLOW}[*] No Python 3.10+ in this Ubuntu's own repositories; adding the deadsnakes PPA...${NC}"
+        $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q software-properties-common >/dev/null 2>&1 || true
+        if $SUDO add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 && $SUDO apt-get update -q >/dev/null 2>&1; then
+            for v in 3.12 3.11 3.10; do
+                if $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q "python$v" "python$v-venv" "python$v-dev" >/dev/null 2>&1; then
+                    echo -e "${GREEN}[OK] Installed python$v from deadsnakes.${NC}"
+                    find_python && return 0
+                fi
+            done
+        fi
     fi
     return 1
 }
@@ -242,15 +292,51 @@ if ! command_exists git || ! check_python; then
     echo -e "${YELLOW}[*] Missing Git or Python 3.10+. Attempting to install...${NC}"
     if [[ "$OS" == "linux" ]]; then
         install_deps_linux || { echo -e "${RED}[!] Failed to install dependencies via package manager.${NC}"; exit 1; }
+        # Xin apt cài «python3» là vô nghĩa trên Ubuntu 20.04 — nó trả lời "already the newest
+        # version" (3.8) rồi bộ cài bỏ cuộc. Phải đi xin một bản CÓ SỐ (python3.11…), và nếu repo
+        # của distro không có thì thêm PPA deadsnakes.
+        if ! check_python >/dev/null 2>&1 && command_exists apt-get; then
+            install_python_apt || true
+        fi
     elif [[ "$OS" == "macos" ]]; then
         install_deps_macos || { exit 1; }
     fi
-    
-    # Check again
+
+    # Vẫn thiếu thì NÓI RA thiếu cái gì và chạy lệnh gì — một dòng "Failed to ensure" để người
+    # dùng tự đoán là cách chắc chắn nhất làm họ bỏ cuộc (ảnh user 2/10/2026).
     if ! command_exists git || ! check_python; then
-        echo -e "${RED}[!] Failed to ensure Python 3.10+ and Git are installed.${NC}"
+        echo ""
+        echo -e "${RED}[!] May nay chua du dieu kien de cai TubeCLI.${NC}"
+        command_exists git || echo -e "${RED}    - thieu git${NC}"
+        check_python >/dev/null 2>&1 || echo -e "${RED}    - thieu Python 3.10+ (hien co: $(python3 -V 2>&1 || echo 'khong co python3'))${NC}"
+        echo ""
+        echo -e "${YELLOW}Yeu cau toi thieu:${NC}"
+    echo -e "    Ubuntu 22.04 tro len / Debian 12 tro len (20.04 KHONG dung duoc: Python 3.8)"
+        echo -e "    Python 3.10+ . git . ffmpeg kem ffprobe . RAM >= 2 GB . dia trong >= 10 GB"
+        echo ""
+        if command_exists apt-get && grep -qi ubuntu /etc/os-release 2>/dev/null; then
+            PFX=""
+            [[ -n "$SUDO" ]] && PFX="$SUDO "
+            if grep -qE 'VERSION_ID="?20\.04' /etc/os-release 2>/dev/null; then
+                echo -e "${RED}Ubuntu 20.04 KHONG dung duoc:${NC} Python cua no la 3.8, va PPA deadsnakes"
+                echo -e "    da bo ban 20.04 (do 2/10/2026) nen khong con cach nao lay Python 3.10+ qua apt."
+                echo -e "${YELLOW}Cach chua:${NC} dung lai may voi ${GREEN}Ubuntu 22.04 hoac 24.04${NC} roi cai lai."
+            else
+                echo -e "${YELLOW}Chay tay roi cai lai:${NC}"
+                echo -e "    ${PFX}apt-get update && ${PFX}apt-get install -y software-properties-common"
+                echo -e "    ${PFX}add-apt-repository -y ppa:deadsnakes/ppa && ${PFX}apt-get update"
+                echo -e "    ${PFX}apt-get install -y python3.11 python3.11-venv git ffmpeg"
+            fi
+        fi
         exit 1
     fi
+fi
+
+# ffmpeg PHAI duoc cai du may da co git + Python. Truoc day install_ffmpeg_best_effort chi nam
+# trong install_deps_linux, ma ham do chi chay khi THIEU git/python — nen mot VPS da co san
+# Python 3.10+ thi khong bao gio duoc cai ffmpeg, va ca day chuyen video chet o buoc cuoi.
+if [[ "$OS" == "linux" ]]; then
+    install_ffmpeg_best_effort
 fi
 
 # Having python3 does not mean having pip or venv. Debian and Ubuntu ship them as
@@ -489,7 +575,7 @@ if [[ "$PIP_RC" -eq 0 ]]; then
 elif grep -q "externally-managed-environment" "$PIP_LOG"; then
     echo -e "${YELLOW}[!] This Python is managed by your OS and will not accept packages directly.${NC}"
     echo -e "${YELLOW}[*] Installing into a private virtualenv instead...${NC}"
-    if ! python3 -m venv "$TARGET_DIR/.venv"; then
+    if ! "${PY:-python3}" -m venv "$TARGET_DIR/.venv"; then
         echo -e "${RED}[!] Could not create a virtualenv.${NC}"
         echo -e "${YELLOW}    Install the venv package first, then re-run this script:${NC}"
         echo -e "      sudo apt install python3-venv     ${YELLOW}# Debian/Ubuntu${NC}"
