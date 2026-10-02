@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "Cấp quyền cho {email} trong cửa sổ vừa mở — hộp này tự nhận quyền mới.",
   "codex.retry_reauth_open": "Mở trang Google",
   "codex.retry_reauth_done": "Đã cấp quyền lại: {email} — bấm Chạy lại.",
-  "codex.retry_reauth_gave_up": "Chưa nhận được quyền mới — cửa sổ đã đóng hoặc Google từ chối. Thử lại hoặc chọn tài khoản khác."
+  "codex.retry_reauth_gave_up": "Chưa nhận được quyền mới — cửa sổ đã đóng hoặc Google từ chối. Thử lại hoặc chọn tài khoản khác.",
+  "codex.ext_images_pick": "Chọn ảnh…",
+  "codex.ext_images_count": "Đã chọn {n} ảnh",
+  "codex.ext_uploading": "Đang tải ảnh lên… {n}/{total}",
+  "codex.ext_select_pick": "— chọn —",
+  "codex.toast_ext_required": "Còn thiếu: {field}",
+  "codex.created_ext_title": "Việc #{seq} đã vào hàng",
+  "codex.created_ext_desc": "Dây chuyền chạy trên máy này; theo dõi từng bước ngay trên bảng."
 }

@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "请在打开的窗口中完成 {email} 的授权——本窗口会自动获取新权限。",
   "codex.retry_reauth_open": "打开 Google 页面",
   "codex.retry_reauth_done": "已重新授权：{email}——请点「重试」。",
-  "codex.retry_reauth_gave_up": "没有收到新的授权——窗口已关闭或 Google 拒绝了。请重试或换一个账号。"
+  "codex.retry_reauth_gave_up": "没有收到新的授权——窗口已关闭或 Google 拒绝了。请重试或换一个账号。",
+  "codex.ext_images_pick": "选择图片…",
+  "codex.ext_images_count": "已选择 {n} 张图片",
+  "codex.ext_uploading": "正在上传图片… {n}/{total}",
+  "codex.ext_select_pick": "— 请选择 —",
+  "codex.toast_ext_required": "请填写：{field}",
+  "codex.created_ext_title": "任务 #{seq} 已排队",
+  "codex.created_ext_desc": "流水线在本服务器上运行，可在看板上跟踪每一步。"
 }

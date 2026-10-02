@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "Завершите авторизацию {email} в открывшемся окне — новый доступ подхватится сам.",
   "codex.retry_reauth_open": "Открыть страницу Google",
   "codex.retry_reauth_done": "Авторизован заново: {email} — нажмите «Повторить».",
-  "codex.retry_reauth_gave_up": "Новый доступ не пришёл — окно закрыли или Google отказал. Попробуйте ещё раз или выберите другой аккаунт."
+  "codex.retry_reauth_gave_up": "Новый доступ не пришёл — окно закрыли или Google отказал. Попробуйте ещё раз или выберите другой аккаунт.",
+  "codex.ext_images_pick": "Выбрать изображения…",
+  "codex.ext_images_count": "Выбрано изображений: {n}",
+  "codex.ext_uploading": "Загрузка изображений… {n}/{total}",
+  "codex.ext_select_pick": "— выбрать —",
+  "codex.toast_ext_required": "Заполните: {field}",
+  "codex.created_ext_title": "Задача #{seq} в очереди",
+  "codex.created_ext_desc": "Конвейер выполняется на этом сервере; следите за шагами на доске."
 }

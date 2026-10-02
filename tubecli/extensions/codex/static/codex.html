@@ -145,8 +145,13 @@
                 <em data-i18n="codex.kind_video_hint">Paste the content and pick a Content Studio template — the AI rewrites it and renders the video</em>
               </span>
             </button>
+            <!-- Loại việc do EXTENSION khai (GET /task-kinds): Pod Studio «Video từ ảnh tham chiếu»… codex.js vẽ nút + form. -->
+            <span id="cx-kind-ext" style="display:contents"></span>
           </div>
         </div>
+
+        <!-- Form chung cho loại việc của extension — dựng từ mô tả trường (text/textarea/number/select/images/checkbox) -->
+        <div id="cx-new-ext" class="hidden"></div>
 
         <div id="cx-new-general">
         <div class="cx-field">

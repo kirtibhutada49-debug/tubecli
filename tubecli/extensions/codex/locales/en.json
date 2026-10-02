@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "Finish authorizing {email} in the window that opened — this box picks up the new access by itself.",
   "codex.retry_reauth_open": "Open the Google page",
   "codex.retry_reauth_done": "Authorized again: {email} — press Retry.",
-  "codex.retry_reauth_gave_up": "No new access arrived — the window was closed or Google refused. Try again or pick another account."
+  "codex.retry_reauth_gave_up": "No new access arrived — the window was closed or Google refused. Try again or pick another account.",
+  "codex.ext_images_pick": "Choose images…",
+  "codex.ext_images_count": "{n} image(s) selected",
+  "codex.ext_uploading": "Uploading images… {n}/{total}",
+  "codex.ext_select_pick": "— pick —",
+  "codex.toast_ext_required": "Please fill in: {field}",
+  "codex.created_ext_title": "Task #{seq} queued",
+  "codex.created_ext_desc": "The pipeline runs on this server; follow its steps on the board."
 }

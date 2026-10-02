@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "請在開啟的視窗中完成 {email} 的授權——此視窗會自動取得新權限。",
   "codex.retry_reauth_open": "開啟 Google 頁面",
   "codex.retry_reauth_done": "已重新授權：{email}——請按「重試」。",
-  "codex.retry_reauth_gave_up": "沒有收到新的授權——視窗已關閉或 Google 拒絕了。請重試或換一個帳號。"
+  "codex.retry_reauth_gave_up": "沒有收到新的授權——視窗已關閉或 Google 拒絕了。請重試或換一個帳號。",
+  "codex.ext_images_pick": "選擇圖片…",
+  "codex.ext_images_count": "已選擇 {n} 張圖片",
+  "codex.ext_uploading": "正在上傳圖片… {n}/{total}",
+  "codex.ext_select_pick": "— 請選擇 —",
+  "codex.toast_ext_required": "請填寫：{field}",
+  "codex.created_ext_title": "任務 #{seq} 已排隊",
+  "codex.created_ext_desc": "流水線在本伺服器上執行，可在看板上追蹤每一步。"
 }

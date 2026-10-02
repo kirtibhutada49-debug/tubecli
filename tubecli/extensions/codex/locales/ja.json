@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "開いたウィンドウで {email} の認証を完了してください — 新しいアクセスは自動で反映されます。",
   "codex.retry_reauth_open": "Google のページを開く",
   "codex.retry_reauth_done": "再認証しました: {email} — 「再実行」を押してください。",
-  "codex.retry_reauth_gave_up": "新しいアクセスが届きませんでした — ウィンドウが閉じられたか Google が拒否しました。もう一度試すか別のアカウントを選んでください。"
+  "codex.retry_reauth_gave_up": "新しいアクセスが届きませんでした — ウィンドウが閉じられたか Google が拒否しました。もう一度試すか別のアカウントを選んでください。",
+  "codex.ext_images_pick": "画像を選択…",
+  "codex.ext_images_count": "{n} 枚選択済み",
+  "codex.ext_uploading": "画像をアップロード中… {n}/{total}",
+  "codex.ext_select_pick": "— 選択 —",
+  "codex.toast_ext_required": "未入力: {field}",
+  "codex.created_ext_title": "タスク #{seq} をキューに追加",
+  "codex.created_ext_desc": "パイプラインはこのサーバーで実行されます。ボードで各ステップを確認できます。"
 }

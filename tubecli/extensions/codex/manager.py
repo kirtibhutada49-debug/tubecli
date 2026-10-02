@@ -1666,7 +1666,19 @@ _STEP_EXT = {
 
 
 def _step_extension(step: str) -> str:
-    return _STEP_EXT.get(str(step or "").strip().lower(), "codex")
+    s = str(step or "").strip().lower()
+    if s in _STEP_EXT:
+        return _STEP_EXT[s]
+    # Bước của pipeline do extension đăng ký (codex/pipelines.py) — extension tự khai bước nào của nhà nào.
+    try:
+        from tubecli.extensions.codex.pipelines import step_extension
+
+        ext = step_extension(s)
+        if ext:
+            return ext
+    except Exception:
+        pass
+    return "codex"
 
 
 def _backlog_key(task: Dict[str, Any]):

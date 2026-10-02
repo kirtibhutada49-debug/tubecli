@@ -465,6 +465,19 @@ async def plan_task(task_id: str):
     return {"status": "planned", "task": updated}
 
 
+@router.get("/task-kinds")
+async def list_task_kinds(lang: str = "en"):
+    """Loại việc do extension khai cho cửa sổ «Nhiệm vụ mới» (codex/pipelines.register_task_kind) — đã dịch theo
+    `lang`. Chỉ loại có pipeline đang đăng ký (extension đã bật); lõi không có loại nào ở đây."""
+    try:
+        from tubecli.extensions.codex.pipelines import task_kinds
+
+        return {"kinds": task_kinds(lang)}
+    except Exception as e:
+        logger.warning(f"[Codex] task-kinds: {e}")
+        return {"kinds": []}
+
+
 @router.get("/assignees")
 async def list_assignees():
     """Agents and teams available as delegation targets (for the UI picker)."""

@@ -111,6 +111,20 @@ async def _run_registered_pipeline(
         logger.info(f"[Codex] running {kind} for agent {payload.get('agent_id', '')!r}")
         return await asyncio.to_thread(run_kind, kind, payload, report, is_cancelled)
 
+    # Pipeline do extension KHÁC đăng ký lúc bật (codex/pipelines.py) — Pod Studio «Video từ ảnh tham chiếu»…
+    # Lõi không cần biết tên từng extension nữa.
+    try:
+        from tubecli.extensions.codex.pipelines import run_registered
+
+        result = await run_registered(kind, payload, report, is_cancelled)
+        if result is not None:
+            return result
+    except TaskCancelled:
+        raise
+    except Exception as e:
+        logger.error(f"[Codex] registered pipeline {kind!r} failed: {e}", exc_info=True)
+        raise
+
     logger.warning(f"[Codex] unknown pipeline kind {kind!r}; falling back to the agent")
     return None
 

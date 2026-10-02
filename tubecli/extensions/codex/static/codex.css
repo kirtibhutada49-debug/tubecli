@@ -865,3 +865,8 @@ body {
 .cx-rt-drive-alert span { overflow-wrap: anywhere; }
 .cx-rt-reauth-ok { color: var(--cx-green, #22c55e); font-weight: 600; }
 .cx-rt-reauth-wait a { font-weight: 600; }
+
+/* Form loại việc của extension (codex.js renderExtForm): ảnh đã chọn cho trường kiểu images */
+.cx-x-previews { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.cx-x-previews img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(128,128,128,.35); }
+.cx-req { color: #f87171; }

@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "Termina de autorizar {email} en la ventana que se abrió — este cuadro recoge el nuevo acceso solo.",
   "codex.retry_reauth_open": "Abrir la página de Google",
   "codex.retry_reauth_done": "Autorizada de nuevo: {email} — pulsa Reintentar.",
-  "codex.retry_reauth_gave_up": "No llegó un acceso nuevo — se cerró la ventana o Google lo rechazó. Inténtalo otra vez o elige otra cuenta."
+  "codex.retry_reauth_gave_up": "No llegó un acceso nuevo — se cerró la ventana o Google lo rechazó. Inténtalo otra vez o elige otra cuenta.",
+  "codex.ext_images_pick": "Elegir imágenes…",
+  "codex.ext_images_count": "{n} imagen(es) seleccionada(s)",
+  "codex.ext_uploading": "Subiendo imágenes… {n}/{total}",
+  "codex.ext_select_pick": "— elegir —",
+  "codex.toast_ext_required": "Falta: {field}",
+  "codex.created_ext_title": "Tarea #{seq} en cola",
+  "codex.created_ext_desc": "La canalización se ejecuta en este servidor; sigue sus pasos en el tablero."
 }

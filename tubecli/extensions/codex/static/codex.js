@@ -64,6 +64,9 @@ const CODEX = (() => {
     worker: null,
     filter: 'all',        // nhóm trạng thái (GROUPS) — máy chủ lọc; mở ra đứng ở «Tất cả» (user 26/9/2026)
     kind: '',             // '' | 'video' | 'general'
+    extKinds: [],         // loại việc do extension khai (GET /task-kinds) — Pod Studio «Video từ ảnh tham chiếu»…
+    extKind: null,        // mô tả loại đang chọn trong cửa sổ «Nhiệm vụ mới» (null = general/video)
+    extFiles: {},         // {key: File[]} ảnh đã chọn cho trường kiểu images
     agent: '',            // assignee_id
     language: '',         // meta.language
     sort: 'newest',
@@ -1951,6 +1954,7 @@ const CODEX = (() => {
     btn.disabled = false;
     $('cx-queue-btn').disabled = false;
     $('cx-modal-new').classList.remove('hidden');
+    await loadExtKinds();
     setNewKind(lsGet(NEW_KIND_KEY) || 'general');
     // Mẫu và agent là hai lời gọi độc lập — nạp song song, đừng bắt người dùng
     // chờ cái này xong mới thấy cái kia.
@@ -1981,6 +1985,7 @@ const CODEX = (() => {
 
   async function submitNewTask() {
     if (state.newKind === 'video') return submitVideo();
+    if (state.extKind) return submitExt();
     const goal = ($('cx-f-goal').value || '').trim();
     if (!goal) {
       toast(t('codex.toast_goal_required'), 'error');
@@ -2086,20 +2091,198 @@ const CODEX = (() => {
   }
 
   function setNewKind(kind) {
-    state.newKind = kind === 'video' ? 'video' : 'general';
+    // 'ext:<id>' = loại do extension khai; không còn (extension tắt) thì về việc chung.
+    const ext = String(kind || '').startsWith('ext:') ? state.extKinds.find(k => 'ext:' + k.id === kind) : null;
+    state.newKind = ext ? kind : (kind === 'video' ? 'video' : 'general');
+    state.extKind = ext || null;
     lsSet(NEW_KIND_KEY, state.newKind);
     const video = state.newKind === 'video';
     document.querySelectorAll('#cx-modal-new .cx-kind-opt').forEach(b =>
       b.setAttribute('aria-checked', String(b.dataset.kind === state.newKind)));
-    $('cx-new-general').classList.toggle('hidden', video);
+    $('cx-new-general').classList.toggle('hidden', video || !!ext);
     $('cx-new-video').classList.toggle('hidden', !video);
+    $('cx-new-ext').classList.toggle('hidden', !ext);
     // "Đưa vào hàng đợi" chỉ có với video: việc chung không có làn để chờ tới lượt.
     $('cx-queue-btn').classList.toggle('hidden', !video);
     const label = $('cx-create-label');
-    const key = video ? 'codex.btn_create_video' : 'codex.btn_create';
-    label.setAttribute('data-i18n', key);
-    label.textContent = t(key);
-    setTimeout(() => $(video ? 'cx-v-content' : 'cx-f-goal').focus(), 30);
+    if (ext) {
+      label.removeAttribute('data-i18n');
+      label.textContent = ext.submit_label || t('codex.btn_create');
+      renderExtForm(ext);
+    } else {
+      const key = video ? 'codex.btn_create_video' : 'codex.btn_create';
+      label.setAttribute('data-i18n', key);
+      label.textContent = t(key);
+    }
+    setTimeout(() => {
+      const el = ext ? $('cx-new-ext').querySelector('textarea,input:not([type=file]),select') : $(video ? 'cx-v-content' : 'cx-f-goal');
+      if (el) el.focus();
+    }, 30);
+  }
+
+  // ── Loại việc do extension khai (GET /task-kinds) ────────────────────────────
+  // Lõi không biết Pod Studio: extension gửi mô tả trường, ở đây chỉ vẽ form, tải ảnh lên upload_url rồi POST
+  // submit_url. Giá trị (trừ ảnh) nhớ theo từng loại.
+  const EXT_LS = (kind, key) => 'codex.x.' + kind + '.' + key;
+
+  async function loadExtKinds() {
+    try {
+      const d = await api('/task-kinds?lang=' + encodeURIComponent(document.documentElement.lang || 'en'));
+      state.extKinds = Array.isArray(d && d.kinds) ? d.kinds : [];
+    } catch (e) {
+      state.extKinds = [];
+    }
+    const host = $('cx-kind-ext');
+    if (!host) return;
+    host.innerHTML = state.extKinds.map(k => `
+            <button type="button" class="cx-kind-opt" role="radio" aria-checked="false" data-kind="ext:${esc(k.id)}"
+                    onclick="CODEX.setNewKind('ext:${esc(k.id)}')">
+              <span class="material-symbols-outlined" aria-hidden="true">${esc(k.icon || 'extension')}</span>
+              <span class="cx-kind-text">
+                <strong>${esc(k.label || k.id)}</strong>${k.hint ? `<em>${esc(k.hint)}</em>` : ''}
+              </span>
+            </button>`).join('');
+  }
+
+  function extFieldId(key) { return 'cx-x-' + String(key).replace(/[^\w-]/g, '_'); }
+
+  async function renderExtForm(ext) {
+    const box = $('cx-new-ext');
+    state.extFiles = {};
+    const fields = ext.fields || [];
+    box.innerHTML = fields.map(f => {
+      const id = extFieldId(f.key);
+      const saved = f.type === 'images' ? '' : lsGet(EXT_LS(ext.id, f.key));
+      const val = saved !== '' ? saved : (f.default != null ? String(f.default) : '');
+      const req = f.required ? ' <span class="cx-req" aria-hidden="true">*</span>' : '';
+      const hint = f.hint ? `<div class="cx-field-meta">${esc(f.hint)}</div>` : '';
+      if (f.type === 'textarea') {
+        return `<div class="cx-field"><label for="${id}">${esc(f.label || f.key)}${req}</label>
+          <textarea id="${id}" rows="${parseInt(f.rows, 10) || 4}" placeholder="${esc(f.placeholder || '')}"
+                    oninput="CODEX.onExtField('${esc(f.key)}', this)">${esc(val)}</textarea>${hint}</div>`;
+      }
+      if (f.type === 'number') {
+        const attrs = ['min', 'max', 'step'].map(a => f[a] != null ? `${a}="${esc(String(f[a]))}"` : '').join(' ');
+        return `<div class="cx-field cx-field-narrow"><label for="${id}">${esc(f.label || f.key)}${req}</label>
+          <input type="number" id="${id}" value="${esc(val)}" ${attrs} onchange="CODEX.onExtField('${esc(f.key)}', this)">${hint}</div>`;
+      }
+      if (f.type === 'checkbox') {
+        return `<label class="cx-check"><input type="checkbox" id="${id}" ${val === '1' || val === 'true' ? 'checked' : ''}
+          onchange="CODEX.onExtField('${esc(f.key)}', this)"><span><strong>${esc(f.label || f.key)}</strong>${f.hint ? `<em>${esc(f.hint)}</em>` : ''}</span></label>`;
+      }
+      if (f.type === 'select') {
+        const opts = (f.options || []).map(o => `<option value="${esc(String(o.value))}" ${String(o.value) === val ? 'selected' : ''}>${esc(o.label || o.value)}</option>`).join('');
+        return `<div class="cx-field"><label for="${id}">${esc(f.label || f.key)}${req}</label>
+          <select id="${id}" data-url="${esc(f.options_url || '')}" onchange="CODEX.onExtField('${esc(f.key)}', this)">${opts}</select>${hint}</div>`;
+      }
+      if (f.type === 'images') {
+        return `<div class="cx-field"><label for="${id}">${esc(f.label || f.key)}${req}</label>
+          <input type="file" id="${id}" accept="image/*" ${(parseInt(f.max, 10) || 4) > 1 ? 'multiple' : ''} onchange="CODEX.onExtFiles('${esc(f.key)}', this)">
+          <div class="cx-x-previews" id="${id}-p"><span class="cx-field-meta">${esc(t('codex.ext_images_pick'))}</span></div>${hint}</div>`;
+      }
+      return `<div class="cx-field"><label for="${id}">${esc(f.label || f.key)}${req}</label>
+        <input type="text" id="${id}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}" oninput="CODEX.onExtField('${esc(f.key)}', this)">${hint}</div>`;
+    }).join('');
+    // select có options_url: hỏi máy chủ rồi điền; giá trị đã nhớ được chọn lại nếu còn.
+    for (const f of fields.filter(x => x.type === 'select' && x.options_url)) {
+      const sel = $(extFieldId(f.key));
+      try {
+        const d = await request(f.options_url);
+        const opts = Array.isArray(d) ? d : (d && d.options) || [];
+        const saved = lsGet(EXT_LS(ext.id, f.key)) || (f.default != null ? String(f.default) : '');
+        sel.innerHTML = `<option value="">${esc(t('codex.ext_select_pick'))}</option>` + opts.map(o => {
+          const v = typeof o === 'object' ? o.value : o;
+          const l = typeof o === 'object' ? (o.label || o.value) : o;
+          return `<option value="${esc(String(v))}" ${String(v) === saved ? 'selected' : ''}>${esc(String(l))}</option>`;
+        }).join('');
+      } catch (e) {
+        sel.innerHTML = `<option value="">${esc(e.message)}</option>`;
+      }
+    }
+  }
+
+  function onExtField(key, el) {
+    if (!state.extKind) return;
+    lsSet(EXT_LS(state.extKind.id, key), el.type === 'checkbox' ? (el.checked ? '1' : '0') : (el.value || ''));
+  }
+
+  function onExtFiles(key, input) {
+    const files = Array.from(input.files || []);
+    const f = (state.extKind && state.extKind.fields || []).find(x => x.key === key) || {};
+    const max = parseInt(f.max, 10) || 4;
+    state.extFiles[key] = files.slice(0, max);
+    const box = $(extFieldId(key) + '-p');
+    if (!box) return;
+    box.innerHTML = state.extFiles[key].map(file => `<img src="${URL.createObjectURL(file)}" alt="">`).join('')
+      + `<span class="cx-field-meta">${esc(t('codex.ext_images_count', { n: state.extFiles[key].length }))}</span>`;
+  }
+
+  async function uploadExtImage(url, file) {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const resp = await fetch(url, { method: 'POST', body: fd });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !(data.url || data.filepath)) throw new Error((data && data.detail) || ('HTTP ' + resp.status));
+    return { url: data.url || '', filepath: data.filepath || '', name: file.name };
+  }
+
+  async function submitExt() {
+    const ext = state.extKind;
+    if (!ext) return;
+    const payload = { created_by: 'user' };
+    for (const f of ext.fields || []) {
+      let v;
+      if (f.type === 'images') v = state.extFiles[f.key] || [];
+      else {
+        const el = $(extFieldId(f.key));
+        v = f.type === 'checkbox' ? !!el.checked : f.type === 'number' ? (el.value === '' ? null : Number(el.value)) : (el.value || '').trim();
+      }
+      if (f.required && (v === '' || v == null || (Array.isArray(v) && !v.length))) {
+        toast(t('codex.toast_ext_required', { field: f.label || f.key }), 'error');
+        const el = $(extFieldId(f.key));
+        if (el) el.focus();
+        return;
+      }
+      payload[f.key] = v;
+    }
+    const btn = $('cx-create-btn');
+    const label = $('cx-create-label');
+    const old = label.textContent;
+    btn.disabled = true;
+    try {
+      // Ảnh tải lên TRƯỚC (từng tấm, có đếm), rồi mới gửi yêu cầu — máy chủ nhận đường dẫn, không nhận file.
+      const imgFields = (ext.fields || []).filter(f => f.type === 'images');
+      const total = imgFields.reduce((n, f) => n + (payload[f.key] || []).length, 0);
+      let done = 0;
+      for (const f of imgFields) {
+        const out = [];
+        for (const file of payload[f.key] || []) {
+          label.textContent = t('codex.ext_uploading', { n: done + 1, total: total });
+          out.push(await uploadExtImage(ext.upload_url, file));
+          done++;
+        }
+        payload[f.key] = out;
+      }
+      label.textContent = old;
+      const data = await request(ext.submit_url, { method: 'POST', body: JSON.stringify(payload) });
+      const task = (data && data.task) || {};
+      if (!task.id) throw new Error((data && (data.report || data.detail)) || 'not queued');
+      state.createdTask = task;
+      const seq = task.seq || '?';
+      toast(t('codex.toast_created', { seq: seq }), 'success');
+      $('cx-created-title').textContent = t('codex.created_ext_title', { seq: seq });
+      $('cx-created-desc').textContent = t('codex.created_ext_desc');
+      $('cx-plan-btn').classList.add('hidden');     // dây chuyền có sẵn các bước, không cần AI lên kế hoạch
+      $('cx-new-step-form').classList.add('hidden');
+      $('cx-new-step-done').classList.remove('hidden');
+      showAllAfterCreate();
+      await refresh(false);
+    } catch (e) {
+      toast(t('codex.toast_action_failed', { error: e.message }), 'error');
+    } finally {
+      label.textContent = old;
+      btn.disabled = false;
+    }
   }
 
   /** {tên: preset} của Content Studio; `false` khi Studio chưa cài / đang tắt. */
@@ -2810,7 +2993,7 @@ const CODEX = (() => {
     approve, reject, cancel, retry, runNow, accept, requestChanges,
     onRetryDrive, onRetryDriveToken, retryReauth,
     confirmNote, confirmDelete, doDelete, copyResult, planTask,
-    openNewTask, submitNewTask, queueVideo, setNewKind, onVideoPreset, onVideoAgent, onVideoContent, onVideoLength, onVideoScript, onVideoKeepTheme, onVideoInstructions, planFromModal, closeModal, onBackdrop,
+    openNewTask, submitNewTask, queueVideo, setNewKind, onExtFiles, onExtField, onVideoPreset, onVideoAgent, onVideoContent, onVideoLength, onVideoScript, onVideoKeepTheme, onVideoInstructions, planFromModal, closeModal, onBackdrop,
     onVideoDrive, onVideoDriveToken, onVideoDriveShare, laneChoice, onVideoSplit, openDriveSync, startDriveSync, syncThenDelete, resumeLane,
     openClone, onCloneLang, startClone, openRetry, startRetry,
   };

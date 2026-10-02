@@ -342,5 +342,12 @@
   "codex.retry_reauth_waiting": "Açılan pencerede {email} için yetkilendirmeyi tamamlayın — yeni erişim kendiliğinden alınır.",
   "codex.retry_reauth_open": "Google sayfasını aç",
   "codex.retry_reauth_done": "Yeniden yetkilendirildi: {email} — Yeniden dene'ye basın.",
-  "codex.retry_reauth_gave_up": "Yeni erişim gelmedi — pencere kapandı ya da Google reddetti. Tekrar deneyin veya başka bir hesap seçin."
+  "codex.retry_reauth_gave_up": "Yeni erişim gelmedi — pencere kapandı ya da Google reddetti. Tekrar deneyin veya başka bir hesap seçin.",
+  "codex.ext_images_pick": "Görsel seç…",
+  "codex.ext_images_count": "{n} görsel seçildi",
+  "codex.ext_uploading": "Görseller yükleniyor… {n}/{total}",
+  "codex.ext_select_pick": "— seçin —",
+  "codex.toast_ext_required": "Eksik: {field}",
+  "codex.created_ext_title": "Görev #{seq} kuyruğa alındı",
+  "codex.created_ext_desc": "İş hattı bu sunucuda çalışır; adımları panodan izleyin."
 }
