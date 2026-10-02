@@ -12,7 +12,8 @@
 // Dùng:
 //   node muse_tool.cjs --cdp <port> --action status
 //   node muse_tool.cjs --cdp <port> --action ask --in <req.json>
-// req.json: {prompt, thread: "new"|"<uuid>", timeout_ms, want_images, image_dir, max_images, files: [đường dẫn]}
+// req.json: {prompt, thread: "new"|"<uuid>", timeout_ms, want_images, image_dir, max_images, want_videos, video_dir,
+//            max_videos, files: [đường dẫn]}
 // In kết quả giữa __MUSE_RESULT__ và __MUSE_END__ để phía Python bóc (tubecli/core/muse.py).
 const fs = require('fs');
 const path = require('path');
@@ -28,6 +29,7 @@ const SEL = {
   message: '[data-message-item]',
   error: '[data-testid="assistant-response-error-notice"]',
   approval: '[data-hatch-composer-approval-stack]',
+  video: '[data-hatch-video-wrapper] video, video',
 };
 // Câu trả lời coi là XONG khi không còn nút dừng / chữ đang chạy và đứng yên chừng này.
 const QUIET_MS = 1800;
@@ -35,6 +37,9 @@ const QUIET_MS = 1800;
 const IMAGE_GRACE_MS = 60000;
 // Ảnh nhỏ hơn cạnh này là avatar / biểu tượng, không phải ảnh Muse vẽ.
 const MIN_IMAGE_EDGE = 256;
+// Xin video mà ô trả lời đã đứng yên chừng này vẫn chưa có video → coi như Muse không làm. Đo 2/10/2026: ô trả lời
+// chỉ xuất hiện KHI video đã xong (~90 s), rồi thẻ <video> sẵn sàng sau ~2 s nữa.
+const VIDEO_GRACE_MS = 90000;
 
 function arg(name, def) {
   const i = process.argv.indexOf('--' + name);
@@ -94,6 +99,7 @@ function turnState(page, seen, minEdge) {
     const after = mine ? items.filter((e) => mine.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING) : [];
     const asst = after.filter((e) => e.getAttribute('data-message-role') === 'assistant');
     const imgs = [];
+    const vids = [];
     let pending = false;
     for (const e of asst) {
       for (const i of e.querySelectorAll('img')) {
@@ -101,7 +107,16 @@ function turnState(page, seen, minEdge) {
         if (!/^(blob:|https?:)/.test(src)) continue;
         if (!i.complete) { pending = true; continue; }
         if (Math.max(i.naturalWidth, i.naturalHeight) < minEdge) continue;
+        // Poster của video cũng là <img> trong ô — không tính là ảnh vẽ.
+        if (i.closest('[data-hatch-video-wrapper]')) continue;
         imgs.push(i.naturalWidth + 'x' + i.naturalHeight);
+      }
+      for (const v of e.querySelectorAll(sel.video)) {
+        const src = v.currentSrc || v.src || (v.closest('[data-hatch-video-wrapper]') || {}).getAttribute?.('data-hatch-video-src') || '';
+        if (!/^(blob:|https?:)/.test(src)) continue;
+        // readyState < 1: chưa đọc được metadata (độ dài/kích thước) — còn đang tải.
+        if (v.readyState < 1 || !(v.duration > 0)) { pending = true; continue; }
+        vids.push(v.videoWidth + 'x' + v.videoHeight + '@' + Math.round(v.duration));
       }
     }
     const err = document.querySelector(sel.error);
@@ -109,6 +124,7 @@ function turnState(page, seen, minEdge) {
       n: asst.length,
       lens: asst.map((e) => (e.innerText || '').length),
       imgs,
+      vids,
       pending,
       stop: !!document.querySelector(sel.stop),
       streaming: !!document.querySelector(sel.streaming),
@@ -192,7 +208,65 @@ async function saveImages(page, seen, dir, maxImages) {
   return saved;
 }
 
-// ── ask: gõ một câu vào chat (mới hoặc chat phụ đang dùng), chờ trả lời xong, lấy chữ + ảnh ──────
+// Video Muse làm (image→video / text→video, ~10 s mỗi clip): tải blob qua fetch trong trang, kèm poster.
+async function saveVideos(page, seen, dir, maxVideos) {
+  const blobs = await page.evaluate(async ({ seen, sel, maxVideos }) => {
+    const items = [...document.querySelectorAll(sel.message)];
+    const mine = items.filter((e) => e.getAttribute('data-message-role') === 'user'
+      && !seen.includes(e.getAttribute('data-message-id'))).pop();
+    const asst = items.filter((e) => mine && (mine.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)
+      && e.getAttribute('data-message-role') === 'assistant');
+    const got = new Set();
+    const out = [];
+    const grab = async (src) => {
+      const res = await fetch(src, { credentials: 'include' });
+      const b = new Uint8Array(await res.arrayBuffer());
+      let s = '';
+      for (let k = 0; k < b.length; k += 0x8000) s += String.fromCharCode.apply(null, b.subarray(k, k + 0x8000));
+      return { ok: res.ok, mime: res.headers.get('content-type') || '', b64: btoa(s) };
+    };
+    for (const e of asst) {
+      for (const v of e.querySelectorAll(sel.video)) {
+        const wrap = v.closest('[data-hatch-video-wrapper]');
+        const src = v.currentSrc || v.src || (wrap ? wrap.getAttribute('data-hatch-video-src') : '') || '';
+        if (!/^(blob:|https?:)/.test(src) || got.has(src)) continue;
+        got.add(src);
+        if (out.length >= maxVideos) break;
+        try {
+          const item = { ...(await grab(src)), width: v.videoWidth, height: v.videoHeight, duration: v.duration,
+            name: wrap ? (wrap.getAttribute('aria-label') || '').slice(0, 200) : '' };
+          const poster = wrap ? wrap.getAttribute('data-hatch-video-poster') : (v.poster || '');
+          if (poster && /^(blob:|https?:)/.test(poster)) {
+            try { item.poster = await grab(poster); } catch { /* poster không bắt buộc */ }
+          }
+          out.push(item);
+        } catch (err) { out.push({ ok: false, error: String(err) }); }
+      }
+    }
+    return out;
+  }, { seen, sel: SEL, maxVideos });
+  const saved = [];
+  if (!blobs.length) return saved;
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = Date.now().toString(36);
+  blobs.forEach((b, i) => {
+    if (!b.ok || !b.b64) { saved.push({ error: b.error || 'download failed' }); return; }
+    const buf = Buffer.from(b.b64, 'base64');
+    const ext = /webm/.test(b.mime) ? '.webm' : '.mp4';
+    const file = path.join(dir, `muse_${stamp}_${i}${ext}`);
+    fs.writeFileSync(file, buf);
+    const rec = { path: file, mime: b.mime, bytes: buf.length, width: b.width, height: b.height, duration: b.duration, name: b.name };
+    if (b.poster && b.poster.ok && b.poster.b64) {
+      const pext = /png/.test(b.poster.mime) ? '.png' : /webp/.test(b.poster.mime) ? '.webp' : '.jpg';
+      rec.poster = path.join(dir, `muse_${stamp}_${i}_poster${pext}`);
+      fs.writeFileSync(rec.poster, Buffer.from(b.poster.b64, 'base64'));
+    }
+    saved.push(rec);
+  });
+  return saved;
+}
+
+// ── ask: gõ một câu vào chat (mới hoặc chat phụ đang dùng), chờ trả lời xong, lấy chữ + ảnh/video ────
 async function ask(ctx, req) {
   const t0 = Date.now();
   const timeout = Math.max(15000, Number(req.timeout_ms) || 240000);
@@ -268,7 +342,7 @@ async function ask(ctx, req) {
     let firstMs = 0;
     while (Date.now() < deadline) {
       st = await turnState(page, seen, MIN_IMAGE_EDGE);
-      const s = JSON.stringify([st.n, st.lens, st.imgs, st.pending, st.stop, st.streaming, st.busy]);
+      const s = JSON.stringify([st.n, st.lens, st.imgs, st.vids, st.pending, st.stop, st.streaming, st.busy]);
       if (s !== sig) {
         sig = s; changedAt = Date.now();
         if (process.env.MUSE_DEBUG) console.error(`[muse] +${((Date.now() - t0) / 1000).toFixed(1)}s ${s} mine=${myId}`);
@@ -278,7 +352,9 @@ async function ask(ctx, req) {
       if (st.approval && !st.stop) break;
       const idle = Date.now() - changedAt;
       const settled = st.n > 0 && !st.stop && !st.streaming && !st.busy && !st.pending && idle >= QUIET_MS;
-      if (settled && (!req.want_images || st.imgs.length > 0 || idle >= IMAGE_GRACE_MS)) break;
+      const gotImages = !req.want_images || st.imgs.length > 0 || idle >= IMAGE_GRACE_MS;
+      const gotVideos = !req.want_videos || st.vids.length > 0 || idle >= VIDEO_GRACE_MS;
+      if (settled && gotImages && gotVideos) break;
       await sleep(400);
     }
     const timedOut = Date.now() >= deadline;
@@ -287,14 +363,17 @@ async function ask(ctx, req) {
     const images = req.want_images
       ? await saveImages(page, seen, req.image_dir || path.join(process.cwd(), 'muse_images'), Math.max(1, Number(req.max_images) || 4))
       : [];
+    const videos = req.want_videos
+      ? await saveVideos(page, seen, req.video_dir || req.image_dir || path.join(process.cwd(), 'muse_videos'), Math.max(1, Number(req.max_videos) || 1))
+      : [];
     const out = {
-      ok: true, text: texts.join('\n\n'), messages: texts, images, thread_id: threadId, url: page.url(),
+      ok: true, text: texts.join('\n\n'), messages: texts, images, videos, thread_id: threadId, url: page.url(),
       elapsed_ms: Date.now() - t0, sent_ms: sentMs, first_ms: firstMs,
     };
     if (st && st.error) Object.assign(out, { ok: false, kind: 'error', error: st.error });
     else if (st && st.approval) Object.assign(out, { ok: false, kind: 'approval', error: 'Muse is waiting for an approval in its own app.' });
-    else if (timedOut) Object.assign(out, { ok: !!(texts.length || images.length) && !req.want_images, kind: 'timeout', error: `Muse did not finish within ${Math.round(timeout / 1000)} s.` });
-    else if (!texts.length && !images.length) Object.assign(out, { ok: false, kind: 'error', error: 'Muse returned an empty reply.' });
+    else if (timedOut) Object.assign(out, { ok: !!(texts.length || images.length || videos.length) && !req.want_images && !req.want_videos, kind: 'timeout', error: `Muse did not finish within ${Math.round(timeout / 1000)} s.` });
+    else if (!texts.length && !images.length && !videos.length) Object.assign(out, { ok: false, kind: 'error', error: 'Muse returned an empty reply.' });
     return out;
   } finally {
     if (!req.keep_tab) await page.close().catch(() => {});

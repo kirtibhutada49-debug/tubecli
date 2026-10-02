@@ -207,6 +207,53 @@ try:
 except M.MuseError as e:
     ok(e.kind == "error" and "Which style" in str(e), "hỏi lại / tán chuyện → error (còn đường lùi)", e.kind)
 
+# ── E2 ────────────────────────────────────────────────────────────────────────
+print("E2. video (2/10/2026: image→video 10 s, 704×1104, ~90 s)")
+seen_v = {}
+
+
+def tool_vid(port, action, req=None, timeout=60):
+    seen_v.update(req)
+    path = os.path.join(req["video_dir"], "muse_x_0.mp4")
+    with open(path, "wb") as f:
+        f.write(b"\x00\x00\x00\x18ftypmp42")
+    return {"ok": True, "text": "", "images": [], "videos": [{"path": path, "width": 704, "height": 1104, "duration": 10}],
+            "thread_id": "T-vid"}
+
+
+M.run_tool = tool_vid
+vd = Path(tempfile.mkdtemp(dir=TMP))
+(TMP / "p.jpg").write_bytes(b"\xff\xd8\xffx")
+cur_thread = json.loads(STATE.read_text()).get("thread")      # chat phụ dùng chung đang mở (từ nhóm E)
+v = M.generate_video_clip("the boy walks down the hallway", str(vd), [str(TMP / "p.jpg")], "9:16")
+ok(v["path"].endswith(".mp4") and v["duration"] == 10 and v["thread_id"] == "T-vid", "generate_video_clip trả clip", v)
+ok(seen_v.get("want_videos") and seen_v.get("video_dir") == str(vd) and seen_v.get("thread") == cur_thread
+   and "Aspect ratio: 9:16" in seen_v["prompt"] and "reference for the person" in seen_v["prompt"],
+   "lượt đầu: xin video, chat phụ dùng chung, lời xin có khung + tham chiếu", {k: seen_v.get(k) for k in ("thread", "want_videos")})
+v2 = M.generate_video_clip("continue", str(vd), [], "9:16", continue_from=True, thread_id="T-vid")
+ok(seen_v.get("thread") == "T-vid" and "final frame of the previous shot" in seen_v["prompt"],
+   "clip nối tiếp: đúng chat phụ đã chỉ + khung đầu phải trùng khung cuối", seen_v.get("thread"))
+ok(json.loads(STATE.read_text()).get("thread") == "T-vid", "lượt đầu KHÔNG chỉ chat → dùng chat chung và ghi thread mới")
+v3 = M.generate_video_clip("again", str(vd), [], "9:16", continue_from=True, thread_id="T-own")
+ok(seen_v.get("thread") == "T-own" and json.loads(STATE.read_text()).get("thread") == "T-vid",
+   "thread_id riêng KHÔNG ghi đè chat phụ dùng chung")
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": True, "text": "I can't make videos of real people.",
+                                                         "images": [], "videos": [], "thread_id": "T"}
+try:
+    M.generate_video_clip("x", str(vd))
+    ok(False, "từ chối → refused")
+except M.MuseError as e:
+    ok(e.kind == "refused", "trả chữ từ chối thay video → refused", e.kind)
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": False, "kind": "timeout", "error": "Muse did not finish within 600 s."}
+try:
+    M.generate_video_clip("x", str(vd))
+    ok(False, "hết giờ → timeout")
+except M.MuseError as e:
+    ok(e.kind == "timeout", "hết giờ → MuseError(timeout)", e.kind)
+js_src = (ROOT / "tubecli" / "extensions" / "browser" / "muse_tool.cjs").read_text(encoding="utf-8")
+ok("data-hatch-video-wrapper" in js_src and "saveVideos" in js_src and "want_videos" in js_src and "VIDEO_GRACE_MS" in js_src,
+   "driver biết tải video (wrapper + poster + chờ video)")
+
 # ── F ─────────────────────────────────────────────────────────────────────────
 print("F. image_gen")
 from tubecli.core import image_gen as G  # noqa: E402

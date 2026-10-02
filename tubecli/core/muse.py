@@ -300,8 +300,12 @@ def status() -> dict:
 
 def ask(prompt: str, *, want_images: bool = False, files: Optional[List[str]] = None,
         image_dir: str = "", max_images: int = 1, timeout: int = CHAT_TIMEOUT, fresh: bool = False,
-        launch: bool = True) -> dict:
-    """Một lượt hỏi Muse → kết quả của muse_tool (text, images, thread_id…). Ném MuseError."""
+        launch: bool = True, want_videos: bool = False, video_dir: str = "", max_videos: int = 1,
+        thread_id: str = "") -> dict:
+    """Một lượt hỏi Muse → kết quả của muse_tool (text, images, videos, thread_id…). Ném MuseError.
+
+    thread_id: gõ vào ĐÚNG chat phụ này (chuỗi clip nối tiếp phải ở cùng một chat để Muse giữ mạch), bỏ qua
+    chat phụ dùng chung; "" = chat phụ dùng chung như thường."""
     st = settings()
     profile = st["profile"]
     if not profile:
@@ -312,17 +316,20 @@ def ask(prompt: str, *, want_images: bool = False, files: Optional[List[str]] = 
     try:
         port = ensure_browser(profile, launch=launch)
         state = _load_state()
-        thread = pick_thread(state, profile, st["turns_per_chat"], fresh)
+        own = bool(thread_id)
+        thread = thread_id if own else pick_thread(state, profile, st["turns_per_chat"], fresh)
         req = {"prompt": prompt, "thread": thread, "timeout_ms": int(timeout * 1000),
                "want_images": bool(want_images), "max_images": int(max_images or 1),
-               "image_dir": image_dir or "", "files": list(files or [])}
+               "image_dir": image_dir or "", "files": list(files or []),
+               "want_videos": bool(want_videos), "max_videos": int(max_videos or 1), "video_dir": video_dir or ""}
         res = run_tool(port, "ask", req, timeout=timeout)
-        if not res.get("ok") and thread != "new" and res.get("kind") == "error" and not res.get("thread_id"):
+        if not res.get("ok") and thread != "new" and not own and res.get("kind") == "error" and not res.get("thread_id"):
             # Chat phụ đã bị xoá / không mở được → mở chat phụ mới, MỘT lần.
             logger.warning("muse: chat %s unusable (%s) — starting a new one", thread, res.get("error"))
             thread, req["thread"] = "new", "new"
             res = run_tool(port, "ask", req, timeout=timeout)
-        _save_state(next_state(state if thread != "new" else {}, profile, thread, res))
+        if not own:
+            _save_state(next_state(state if thread != "new" else {}, profile, thread, res))
         if not res.get("ok"):
             raise MuseError(str(res.get("kind") or "error"), str(res.get("error") or "Muse request failed."))
         return res
@@ -476,6 +483,49 @@ def generate_image_bytes(prompt: str, aspect_ratio: str = "16:9", reference_imag
         with open(imgs[0]["path"], "rb") as f:
             data = f.read()
     return _to_jpeg(data)
+
+
+# ── video ─────────────────────────────────────────────────────────────────────
+# Đo 2/10/2026: image→video 9:16 → 704×1104, 10 s cố định, h264 + aac, ~6 MB, ~90 s. Muse không nhận độ dài khác.
+VIDEO_TIMEOUT = 600
+
+
+def video_request(prompt: str, aspect_ratio: str = "9:16", continue_from: bool = False) -> str:
+    """Lời xin MỘT clip 10 s. continue_from: ảnh đính kèm ĐẦU là khung cuối của clip trước → khung đầu phải trùng."""
+    ar = aspect_ratio if aspect_ratio in ASPECTS else "9:16"
+    lines = [
+        "Create exactly ONE 10-second video now. Do not ask questions, do not explain, and do not write anything in "
+        "your reply — reply with the video only.",
+        f"Aspect ratio: {ar} ({ASPECTS[ar]}).",
+        "No text, captions, logos or watermarks inside the video.",
+    ]
+    if continue_from:
+        lines.append("The FIRST attached image is the final frame of the previous shot: the video must START from "
+                     "exactly that frame (same person, pose, framing, lighting and background) and continue the "
+                     "action seamlessly. Keep the person's face, hair and outfit identical.")
+    else:
+        lines.append("Use the attached image(s) as the reference for the person, outfit and setting — keep the face, "
+                     "hair and outfit identical.")
+    lines.append("")
+    lines.append("Shot description:")
+    lines.append(str(prompt or "").strip())
+    return "\n".join(lines)
+
+
+def generate_video_clip(prompt: str, out_dir: str, reference_images: Optional[list] = None,
+                        aspect_ratio: str = "9:16", continue_from: bool = False, thread_id: str = "",
+                        timeout: int = VIDEO_TIMEOUT) -> dict:
+    """MỘT clip Muse → {path, poster, width, height, duration, thread_id}. Ném MuseError."""
+    refs = [p for p in (reference_images or []) if p and os.path.isfile(str(p))][:3]
+    os.makedirs(out_dir, exist_ok=True)
+    res = ask(video_request(prompt, aspect_ratio, continue_from), want_videos=True, files=refs, video_dir=out_dir,
+              max_videos=1, timeout=timeout, thread_id=thread_id)
+    vids = [v for v in (res.get("videos") or []) if isinstance(v, dict) and v.get("path")]
+    if not vids:
+        said = " ".join(str(res.get("text") or "").split())[:240]
+        raise MuseError("refused" if _REFUSAL_RE.search(said) else "error",
+                        f"Muse did not make a video{': ' + said if said else '.'}")
+    return {**vids[0], "thread_id": res.get("thread_id", "")}
 
 
 def test_chat(timeout: int = 90) -> dict:
