@@ -2047,6 +2047,14 @@ async def startup_event():
     except Exception as e:  # tính năng phụ: hỏng thì máy vẫn phải khởi động được
         print(f"[public-agents] start skipped: {e}")
 
+    # Tự gửi CPU/RAM/đĩa lên cloud mỗi 15 phút (biểu đồ Giám sát + cảnh báo CPU) — cloud thôi SSH vào
+    # máy để đọc /proc, và máy chỉ nối tunnel (không IP) cũng có biểu đồ. Chưa có khoá cloud thì im.
+    try:
+        from tubecli.core import metrics_push
+        metrics_push.start()
+    except Exception as e:
+        print(f"[metrics-push] start skipped: {e}")
+
     # Nối lại VIỆC THUÊ đang dở (restart giữa lượt dựng): không nối thì cloud thấy máy
     # im 30 phút rồi hoàn tiền oan, trong khi task Codex vẫn dựng tiếp thành mồ côi.
     try:
@@ -5230,32 +5238,14 @@ async def system_stats():
     Trả về đúng hình dạng mà cloud đang dùng cho VPS, để bên kia không phải viết
     hai nhánh hiển thị.
     """
-    import shutil
-
     import psutil
+
+    from tubecli.core.metrics_push import read_stats
 
     # interval=None: đọc mức CPU tích luỹ từ lần gọi trước thay vì CHẶN 1 giây.
     # Cloud poll mỗi 7 giây nên số vẫn đúng, mà route không giữ event loop.
-    cpu = psutil.cpu_percent(interval=None)
-    mem = psutil.virtual_memory()
-    # Ổ chứa TubeCLI, không phải "/" — trên Windows đó có thể là ổ D:, và cái người
-    # dùng quan tâm là chỗ video/hồ sơ trình duyệt đang ăn đĩa.
-    from tubecli.config import BASE_DIR
-    try:
-        disk = shutil.disk_usage(str(BASE_DIR))
-    except OSError:
-        disk = shutil.disk_usage(os.path.abspath(os.sep))
-    return {
-        "cpu": round(cpu, 1),
-        "cores": psutil.cpu_count(logical=True) or 1,
-        "mem_total_mb": round(mem.total / 1048576),
-        "mem_used_mb": round((mem.total - mem.available) / 1048576),
-        "mem_pct": round(mem.percent, 1),
-        "disk_total_gb": round(disk.total / 1073741824, 1),
-        "disk_used_gb": round((disk.total - disk.free) / 1073741824, 1),
-        "disk_pct": round((disk.total - disk.free) / disk.total * 100, 1) if disk.total else 0,
-        "platform": sys.platform,
-    }
+    # (metrics_push tự gửi 15 phút/lần dùng CHUNG read_stats nhưng đo CPU bằng mốc riêng.)
+    return read_stats(psutil.cpu_percent(interval=None))
 
 
 @app.get("/api/v1/system/version")
