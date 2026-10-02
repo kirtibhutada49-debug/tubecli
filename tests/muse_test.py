@@ -245,6 +245,16 @@ try:
     ok(False, "từ chối → refused")
 except M.MuseError as e:
     ok(e.kind == "refused", "trả chữ từ chối thay video → refused", e.kind)
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": True, "text": "Xin lỗi, tôi đã gặp vấn đề khi phản hồi. Vui lòng thử lại.",
+                                                         "images": [], "videos": [], "thread_id": "T"}
+try:
+    M.generate_video_clip("x", str(vd))
+    ok(False, "lỗi hệ thống Muse → error")
+except M.MuseError as e:
+    ok(e.kind == "error", "«Xin lỗi, tôi đã gặp vấn đề… thử lại» = lỗi tạm thời → error (gọi lại được), không phải refused", e.kind)
+ok(M._no_output_kind("I couldn't generate the image — the generation service is temporarily unavailable") == "error"
+   and M._no_output_kind("Sorry, I can't create images of real people.") == "refused" and M._no_output_kind("Which style do you want?") == "error",
+   "_no_output_kind: unavailable → error, từ chối thật → refused, hỏi lại → error")
 M.run_tool = lambda port, action, req=None, timeout=60: {"ok": False, "kind": "timeout", "error": "Muse did not finish within 600 s."}
 try:
     M.generate_video_clip("x", str(vd))

@@ -514,6 +514,18 @@ def image_request(prompt: str, aspect_ratio: str = "16:9", with_refs: bool = Fal
 # từ chối nội dung). Hỏi lại / tán chuyện thì là lỗi thường — lô ảnh còn đường lùi.
 _REFUSAL_RE = re.compile(r"\b(can'?t|cannot|unable to|won'?t|not able to|sorry|policy|policies|guidelines|"
                          r"not allowed|inappropriate)\b|không thể|xin lỗi|chính sách", re.I)
+# Câu BÁO LỖI của chính Muse ("Xin lỗi, tôi đã gặp vấn đề khi phản hồi. Vui lòng thử lại." — Pod Studio #160, 2/10/2026;
+# "the generation service is temporarily unavailable") cũng có «xin lỗi»/«sorry» → phải là lỗi THƯỜNG (gọi lại được),
+# không phải từ chối nội dung.
+_TRANSIENT_RE = re.compile(r"gặp vấn đề|vui lòng thử lại|đã xảy ra lỗi|try again|temporarily unavailable|"
+                           r"something went wrong|an error occurred|ran into a problem|technical (?:issue|problem)", re.I)
+
+
+def _no_output_kind(said: str) -> str:
+    """Muse trả chữ thay cho ảnh/video → 'refused' chỉ khi là lời từ chối nội dung; lỗi hệ thống hay tán chuyện → 'error'."""
+    if _TRANSIENT_RE.search(said or ""):
+        return "error"
+    return "refused" if _REFUSAL_RE.search(said or "") else "error"
 
 
 def _to_jpeg(data: bytes) -> bytes:
@@ -547,8 +559,7 @@ def generate_image_bytes(prompt: str, aspect_ratio: str = "16:9", reference_imag
         imgs = [i for i in (res.get("images") or []) if isinstance(i, dict) and i.get("path")]
         if not imgs:
             said = " ".join(str(res.get("text") or "").split())[:240]
-            raise MuseError("refused" if _REFUSAL_RE.search(said) else "error",
-                            f"Muse did not draw an image{': ' + said if said else '.'}")
+            raise MuseError(_no_output_kind(said), f"Muse did not draw an image{': ' + said if said else '.'}")
         with open(imgs[0]["path"], "rb") as f:
             data = f.read()
     return _to_jpeg(data)
@@ -594,8 +605,7 @@ def generate_video_clip(prompt: str, out_dir: str, reference_images: Optional[li
     vids = [v for v in (res.get("videos") or []) if isinstance(v, dict) and v.get("path")]
     if not vids:
         said = " ".join(str(res.get("text") or "").split())[:240]
-        raise MuseError("refused" if _REFUSAL_RE.search(said) else "error",
-                        f"Muse did not make a video{': ' + said if said else '.'}")
+        raise MuseError(_no_output_kind(said), f"Muse did not make a video{': ' + said if said else '.'}")
     return {**vids[0], "thread_id": res.get("thread_id", "")}
 
 
