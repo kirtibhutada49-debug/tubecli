@@ -45,7 +45,7 @@ CHAT_TIMEOUT = 300
 IMAGE_TIMEOUT = 300
 # Chờ tới lượt (lượt khác đang chạy). Lô ảnh của Studio gửi song song: phải XẾP HÀNG, không được hỏng.
 QUEUE_WAIT = 1800
-LAUNCH_WAIT = 60
+LAUNCH_WAIT = 120
 LAUNCH_SETTLE = 4
 # Hồ sơ tự mở ẩn để phục vụ Muse sống tối đa chừng này (monitor của process_manager tự giết), lượt sau
 # thấy nó tắt thì mở lại.
@@ -176,13 +176,67 @@ def _tool_path() -> str:
     return os.path.join(here, "extensions", "browser", "muse_tool.cjs")
 
 
+def _port_alive(port: int) -> bool:
+    """Cổng này có Chromium thật đang nghe (GET /json/version) — cùng phép thử với browser/routes."""
+    try:
+        from tubecli.extensions.browser.routes import _cdp_alive
+        return bool(_cdp_alive(int(port)))
+    except Exception:      # noqa: BLE001
+        return False
+
+
+def _cdp_port_from_processes(profile: str) -> int:
+    """Cổng CDP đọc từ CHÍNH dòng lệnh Chromium của hồ sơ này: tiến trình chính có `--user-data-dir=<hồ sơ>`
+    và `--remote-debugging-port=N` (N = 0 là cổng ngẫu nhiên → xem cổng tiến trình ấy đang nghe), rồi gõ cửa
+    /json/version.
+
+    Vì sao cần: preview_cdp.json chỉ được tin khi pid khớp bản ghi trong RAM của server — server khởi động lại là
+    mất dấu, lượt mở ẩn kế tiếp xoá luôn file ấy (_STALE_CDP_FILES) rồi mở TRÙNG hồ sơ đang chạy → «Failed to
+    launch the browser process» và nút Thử vẽ báo hỏng trong khi trình duyệt vẫn sống (2/10/2026). Đường dẫn hồ
+    sơ trong dòng lệnh là bằng chứng cổng thuộc đúng hồ sơ — không cần file nào.
+    """
+    try:
+        import psutil
+    except Exception:      # noqa: BLE001
+        return 0
+    target = os.path.normcase(os.path.realpath(os.path.join(_profiles_dir(), profile)))
+    for p in psutil.process_iter(["cmdline"]):
+        try:
+            cmd = list(p.info.get("cmdline") or [])
+        except Exception:      # noqa: BLE001
+            continue
+        if not cmd or any(a.startswith("--type=") for a in cmd):
+            continue        # renderer / gpu… — chỉ tiến trình chính mang cổng
+        udd = next((a[len("--user-data-dir="):] for a in cmd if a.startswith("--user-data-dir=")), "")
+        if not udd or os.path.normcase(os.path.realpath(udd.strip('"'))) != target:
+            continue
+        flag = next((a for a in cmd if a.startswith("--remote-debugging-port=")), "")
+        try:
+            port = int(flag.split("=", 1)[1]) if flag else 0
+        except ValueError:
+            port = 0
+        if port and _port_alive(port):
+            return port
+        try:
+            ports = sorted({c.laddr.port for c in p.net_connections(kind="tcp")
+                            if c.status == "LISTEN" and c.laddr and c.laddr.port})
+        except Exception:      # noqa: BLE001
+            ports = []
+        for cand in ports:
+            if _port_alive(cand):
+                return cand
+    return 0
+
+
 def _cdp_port(profile: str) -> int:
     try:
         from tubecli.extensions.browser.routes import _live_cdp_port
-        return int(_live_cdp_port(profile) or 0)
+        port = int(_live_cdp_port(profile) or 0)
+        if port:
+            return port
     except Exception as e:      # noqa: BLE001
         logger.info("muse: cannot read the CDP port of %s: %s", profile, e)
-        return 0
+    return _cdp_port_from_processes(profile)
 
 
 def _launch_hidden(profile: str) -> None:
@@ -197,29 +251,44 @@ def _launch_hidden(profile: str) -> None:
         raise MuseError("browser", f"Cannot open browser profile '{profile}': "
                                    f"{ref.get('message') or ref.get('code') or 'blocked'}")
     if _is_launching(profile) or is_profile_running(profile):
-        return                          # đang mở dở — chỉ việc chờ cổng CDP
+        return ""                       # đang mở dở — chỉ việc chờ cổng CDP
     logger.info("muse: opening browser profile %s in the background", profile)
     res = browser_process_manager.spawn(profile=profile, url="https://muse.ai/", headless=True, manual=True,
                                         max_duration=HIDDEN_SESSION_MAX)
     if not isinstance(res, dict) or res.get("status") == "error":
         raise MuseError("browser", f"Could not open browser profile '{profile}' "
                                    f"({(res or {}).get('error') or 'launch failed'}).")
+    return str(res.get("instance_id") or "")
+
+
+def _instance_status(instance_id: str) -> Optional[dict]:
+    try:
+        from tubecli.extensions.browser.process_manager import browser_process_manager
+        return browser_process_manager.get_status(instance_id)
+    except Exception:      # noqa: BLE001
+        return None
 
 
 def ensure_browser(profile: str, launch: bool = True, sleep=time.sleep) -> int:
-    """Cổng CDP của phiên đang chạy; tắt thì mở ẩn rồi chờ (launch=True)."""
+    """Cổng CDP của phiên đang chạy; tắt thì mở ẩn rồi chờ (launch=True). Tiến trình mở ẩn chết sớm (hồ sơ đang
+    bị một Chromium khác giữ, thiếu RAM…) → báo ngay lý do, không ngồi đợi hết LAUNCH_WAIT."""
     port = _cdp_port(profile)
     if port or not launch:
         if not port:
             raise MuseError("browser", f"Browser profile '{profile}' is not running.")
         return port
-    _launch_hidden(profile)
+    inst = _launch_hidden(profile)
     deadline = time.time() + LAUNCH_WAIT
     while time.time() < deadline:
         port = _cdp_port(profile)
         if port:
             sleep(LAUNCH_SETTLE)        # muse.ai đang nạp trong tab đầu — cho nó chạy xong
             return port
+        if inst:
+            cur = _instance_status(inst)
+            if cur and cur.get("status") not in (None, "running", "starting"):
+                why = cur.get("error") or cur.get("message") or cur.get("status")
+                raise MuseError("browser", f"Browser profile '{profile}' closed before it was ready ({why}).")
         sleep(1.5)
     raise MuseError("browser", f"Browser profile '{profile}' did not become ready within {LAUNCH_WAIT} s.")
 

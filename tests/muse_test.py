@@ -126,6 +126,7 @@ ok(M.local_base_url().startswith("http://127.0.0.1:") and M.local_base_url().end
 # ── D ─────────────────────────────────────────────────────────────────────────
 print("D. ask()")
 calls = []
+_REAL_ENSURE_BROWSER = M.ensure_browser      # giữ bản thật cho nhóm E3
 M.ensure_browser = lambda profile, launch=True: 9222
 
 
@@ -253,6 +254,67 @@ except M.MuseError as e:
 js_src = (ROOT / "tubecli" / "extensions" / "browser" / "muse_tool.cjs").read_text(encoding="utf-8")
 ok("data-hatch-video-wrapper" in js_src and "saveVideos" in js_src and "want_videos" in js_src and "VIDEO_GRACE_MS" in js_src,
    "driver biết tải video (wrapper + poster + chờ video)")
+
+# ── E3 ────────────────────────────────────────────────────────────────────────
+print("E3. cổng CDP từ dòng lệnh Chromium + mở ẩn hỏng sớm (2/10/2026: server restart mất dấu preview_cdp.json)")
+import types as _types
+
+
+class _FakeProc:
+    def __init__(self, cmd, ports=()):
+        self.info = {"cmdline": cmd}
+        self._ports = ports
+
+    def net_connections(self, kind="tcp"):
+        return [_types.SimpleNamespace(status="LISTEN", laddr=_types.SimpleNamespace(port=pt)) for pt in self._ports]
+
+
+def _fake_psutil(procs):
+    m = _types.ModuleType("psutil")
+    m.process_iter = lambda attrs=None: list(procs)
+    return m
+
+
+_real_psutil = sys.modules.get("psutil")
+prof_dir = str(PROFILES / "chayagent")
+alive = {64233, 5555}
+M._port_alive = lambda port: int(port) in alive
+sys.modules["psutil"] = _fake_psutil([
+    _FakeProc(["chrome.exe", "--type=renderer", f"--user-data-dir={prof_dir}", "--remote-debugging-port=64233"]),   # tiến trình con: bỏ
+    _FakeProc(["chrome.exe", f"--user-data-dir={PROFILES / 'other'}", "--remote-debugging-port=64233"]),           # hồ sơ khác: bỏ
+    _FakeProc(["chrome.exe", f"--user-data-dir={prof_dir}", "--remote-debugging-port=64233"]),
+])
+ok(M._cdp_port_from_processes("chayagent") == 64233, "cổng đọc từ --remote-debugging-port của tiến trình chính đúng hồ sơ")
+sys.modules["psutil"] = _fake_psutil([_FakeProc(["chrome.exe", f"--user-data-dir={prof_dir}", "--remote-debugging-port=0"], ports=(4444, 5555))])
+ok(M._cdp_port_from_processes("chayagent") == 5555, "cổng 0 (ngẫu nhiên) → lấy cổng đang nghe mà /json/version trả lời")
+sys.modules["psutil"] = _fake_psutil([_FakeProc(["chrome.exe", f"--user-data-dir={PROFILES / 'other'}", "--remote-debugging-port=64233"])])
+ok(M._cdp_port_from_processes("chayagent") == 0, "không có Chromium của hồ sơ này → 0")
+if _real_psutil is not None:
+    sys.modules["psutil"] = _real_psutil
+else:
+    del sys.modules["psutil"]
+
+# ensure_browser (bản thật, các mắt xích giả): tiến trình mở ẩn chết sớm → báo ngay lý do, không đợi hết LAUNCH_WAIT
+_eb = _REAL_ENSURE_BROWSER
+_seq = iter([0, 0, 0, 0])
+M._cdp_port = lambda profile: next(_seq, 0)
+M._launch_hidden = lambda profile: "inst-1"
+M._instance_status = lambda inst: {"status": "error", "error": "Failed to launch the browser process"}
+waited = []
+try:
+    _eb("chayagent", sleep=lambda s: waited.append(s))
+    ok(False, "mở ẩn hỏng → MuseError(browser) ngay")
+except M.MuseError as e:
+    ok(e.kind == "browser" and "Failed to launch" in str(e) and sum(waited) < M.LAUNCH_WAIT,
+       "mở ẩn hỏng → MuseError(browser) kèm lý do, không đợi hết LAUNCH_WAIT", (e.kind, str(e)[:80], sum(waited)))
+_seq = iter([0, 0, 7777])
+M._instance_status = lambda inst: {"status": "running"}
+ok(_eb("chayagent", sleep=lambda s: waited.append(s)) == 7777, "mở ẩn xong → trả cổng")
+try:
+    _eb("chayagent", launch=False)
+    ok(False, "launch=False mà tắt → browser")
+except M.MuseError as e:
+    ok(e.kind == "browser", "launch=False mà hồ sơ tắt → MuseError(browser)")
 
 # ── F ─────────────────────────────────────────────────────────────────────────
 print("F. image_gen")
