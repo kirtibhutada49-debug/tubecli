@@ -2663,6 +2663,7 @@ async function renderCloudApiExt(el) {
     // How each capability reads on a card — chat/deploy work, none is honest about it.
     const capBadge = {
         chat:   `<span class="tag" style="background:rgba(34,197,94,.15);color:var(--green)">${T('cloud_api.cap_chat')}</span>`,
+        image:  `<span class="tag" style="background:rgba(82,118,235,.15);color:#5276EB">${T('cloud_api.cap_image')}</span>`,
         deploy: `<span class="tag" style="background:rgba(59,130,246,.15);color:var(--blue-ink)">${T('cloud_api.cap_deploy')}</span>`,
         none:   `<span class="tag" style="background:rgba(148,163,184,.15);color:var(--text-muted)">${T('cloud_api.cap_none')}</span>`,
     };
@@ -2680,9 +2681,15 @@ async function renderCloudApiExt(el) {
                    : (p.capability && p.capability !== 'none' ? [p.capability] : []);
         // A provider with no consumer must not offer an Add button that pretends
         // its key will be used — that was the "Failed." trap on Cloudflare/GitHub.
-        const addBtn = !caps.length
+        const addBtn = p.browser_session
+            // Muse: không có khoá để thêm — chọn hồ sơ trình duyệt đã đăng nhập muse.ai trong hộp ⚙.
+            ? `<button class="btn-sm btn-primary" onclick="editProviderSettings('${esc(p.id)}', '${esc(p.models.join(','))}')">${T('cloud_api.muse_setup')}</button>`
+            : !caps.length
             ? `<button class="btn-sm" disabled style="opacity:.5;cursor:not-allowed" title="${T('cloud_api.cap_none_hint')}">${T('cloud_api.cap_none')}</button>`
             : `<button class="btn-sm btn-primary" onclick="prefillAddKey('${esc(p.id)}')">${T('cloud_api.add')}</button>`;
+        const keyTag = p.browser_session
+            ? `<span class="tag ${p.has_key?'green':''}">${p.has_key ? esc(T('cloud_api.muse_profile_tag', { profile: p.profile || '' })) : T('cloud_api.no_key')}</span>`
+            : `<span class="tag ${p.has_key?'green':''}">${p.has_key?T('cloud_api.active'):T('cloud_api.no_key')} <span style="font-size:0.75rem;margin-left:4px">(${p.key_count || 0})</span></span>`;
         h += `<div class="card" style="text-align:center">
         <div class="card-icon" style="position:relative">${icon}
             <button class="btn-sm" style="position:absolute;top:0;right:0;padding:2px 6px;background:transparent;color:var(--text-muted);border:none" onclick="editProviderSettings('${esc(p.id)}', '${esc(p.models.join(','))}')" title="Edit Models">⚙️</button>
@@ -2691,7 +2698,7 @@ async function renderCloudApiExt(el) {
         <p class="card-desc" title="${esc(p.models.join(', '))}">${p.models.slice(0,3).join(', ')}${p.models.length>3?'...':''}</p>
         <div class="card-footer" style="justify-content:center;gap:6px;flex-wrap:wrap">
             ${caps.length ? caps.map(cv => capBadge[cv] || '').join('') : capBadge.none}
-            <span class="tag ${p.has_key?'green':''}">${p.has_key?T('cloud_api.active'):T('cloud_api.no_key')} <span style="font-size:0.75rem;margin-left:4px">(${p.key_count || 0})</span></span>
+            ${keyTag}
             ${addBtn}
         </div>
         </div>`;
@@ -2803,7 +2810,7 @@ function _cloudExtBody() {
 function buildAddKeyProviderSelect(preferred) {
     const sel = document.getElementById('add-key-provider');
     if (!sel) return;
-    const provs = window._cloudProviders || [];
+    const provs = (window._cloudProviders || []).filter(p => !p.browser_session);
     sel.innerHTML = provs.map(p => {
         const suffix = p.capability === 'none' ? ` — ${T('cloud_api.cap_none')}` : (p.compound ? ' — Cloudflare' : '');
         return `<option value="${esc(p.id)}">${esc(p.name)}${suffix}</option>`;
@@ -2852,6 +2859,7 @@ function editProviderSettings(provider, currentModelsStr) {
         ((window._cloudProviders || []).find(p => p.id === provider)?.models?.[0]) || 'model-id';
     document.getElementById('model-test-panel').style.display = 'none';
     _renderEndpointPanel();
+    _renderMusePanel();
     _renderModelsSourceNote();
     renderEditModelsList();
     document.getElementById('modal-edit-models').classList.remove('hidden');
@@ -2887,6 +2895,98 @@ function _renderEndpointPanel() {
         </div>
         <div id="provider-endpoint-result" style="font-size:.8rem;margin-top:6px;"></div>`;
 }
+
+// Muse (muse.ai): không có khoá — TubeCLI gõ vào muse.ai trong một hồ sơ trình duyệt đã đăng nhập
+// (tubecli/core/muse.py). Hộp này chọn hồ sơ đó + số lượt dùng chung một chat phụ, kiểm đăng nhập, gọi thử.
+async function _renderMusePanel() {
+    const body = document.querySelector('#modal-edit-models .modal-body');
+    if (!body) return;
+    const meta = (window._cloudProviders || []).find(p => p.id === currentEditProvider) || {};
+    let panel = document.getElementById('provider-muse-panel');
+    if (!meta.browser_session) { if (panel) panel.style.display = 'none'; return; }
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'provider-muse-panel';
+        panel.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px;';
+        body.insertBefore(panel, body.firstChild);
+    }
+    panel.style.display = 'block';
+    panel.innerHTML = `<div class="text-muted" style="font-size:.8rem">${esc(T('chat.loading'))}</div>`;
+    let st = {};
+    try { st = await apiGet('/api/v1/muse/settings') || {}; } catch (e) { st = {}; }
+    const profiles = st.profiles || [];
+    const cur = st.profile || '';
+    const opts = [`<option value="">${esc(T('cloud_api.muse_pick'))}</option>`]
+        .concat(profiles.map(n => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}</option>`));
+    if (cur && !profiles.includes(cur)) opts.push(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+    panel.innerHTML = `
+        <div style="font-weight:600;font-size:.86rem;margin-bottom:4px;">🎨 ${esc(T('cloud_api.muse_title'))}</div>
+        <div class="text-muted" style="font-size:.78rem;margin-bottom:8px;">${esc(T('cloud_api.muse_hint'))}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+            <label style="flex:1;min-width:180px;font-size:.78rem;">${esc(T('cloud_api.muse_profile'))}
+                <select id="muse-profile-select" style="width:100%;margin-top:3px;">${opts.join('')}</select></label>
+            <label style="width:170px;font-size:.78rem;" title="${esc(T('cloud_api.muse_turns_hint'))}">${esc(T('cloud_api.muse_turns'))}
+                <input id="muse-turns-input" type="number" min="1" max="${st.max_turns_per_chat || 100}" value="${st.turns_per_chat || st.default_turns_per_chat || 10}" style="width:100%;margin-top:3px;"></label>
+        </div>
+        <div class="text-muted" style="font-size:.74rem;margin-top:4px;">${esc(T('cloud_api.muse_turns_hint'))}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+            <button class="btn-sm" type="button" style="background:#5276EB;color:#fff;border:none;" onclick="window.saveMuseSettings(this)">${esc(T('cloud_api.muse_save'))}</button>
+            <button class="btn-sm" type="button" onclick="window.checkMuseStatus(this)">${esc(T('cloud_api.muse_check'))}</button>
+            <button class="btn-sm" type="button" onclick="window.testMuseChat(this)">${esc(T('cloud_api.muse_test'))}</button>
+        </div>
+        <div id="muse-panel-result" style="font-size:.8rem;margin-top:6px;white-space:pre-wrap;word-break:break-word;"></div>`;
+}
+
+function _museSay(ok, text) {
+    const out = document.getElementById('muse-panel-result');
+    if (!out) return;
+    out.style.color = ok === null ? 'var(--text-muted)' : (ok ? 'var(--green)' : 'var(--red)');
+    out.textContent = text;
+}
+
+window.saveMuseSettings = async function(btn) {
+    const profile = document.getElementById('muse-profile-select')?.value || '';
+    const turns = parseInt(document.getElementById('muse-turns-input')?.value || '0', 10) || null;
+    btn.disabled = true;
+    try {
+        const r = await apiPut('/api/v1/muse/settings', { profile, turns_per_chat: turns });
+        if (r && r.profile !== undefined && !r.detail) {
+            _museSay(true, r.profile ? T('cloud_api.muse_saved', { profile: r.profile }) : T('cloud_api.muse_cleared'));
+            const meta = (window._cloudProviders || []).find(p => p.id === currentEditProvider);
+            if (meta) { meta.profile = r.profile; meta.has_key = !!r.profile; }
+            renderCloudApiExt(_cloudExtBody());
+        } else {
+            _museSay(false, '❌ ' + ((r && (r.detail || r.message)) || 'save failed'));
+        }
+    } catch (e) { _museSay(false, '❌ ' + e.message); }
+    btn.disabled = false;
+};
+
+window.checkMuseStatus = async function(btn) {
+    btn.disabled = true;
+    _museSay(null, '⏳ ...');
+    try {
+        const r = await apiGet('/api/v1/muse/status') || {};
+        const profile = r.profile || '';
+        if (!r.configured) _museSay(false, T('cloud_api.muse_pick_first'));
+        else if (!r.running) _museSay(null, T('cloud_api.muse_closed', { profile }));
+        else if (r.logged_in) _museSay(true, T('cloud_api.muse_ok', { profile }));
+        else if (r.logged_in === false) _museSay(false, T('cloud_api.muse_not_signed', { profile }));
+        else _museSay(null, r.message || '?');
+    } catch (e) { _museSay(false, '❌ ' + e.message); }
+    btn.disabled = false;
+};
+
+window.testMuseChat = async function(btn) {
+    btn.disabled = true;
+    _museSay(null, '⏳ ' + T('cloud_api.muse_test_running'));
+    try {
+        const r = await apiPost('/api/v1/muse/test', {}) || {};
+        if (r.ok) _museSay(true, T('cloud_api.muse_test_ok', { s: r.seconds, reply: r.reply || '' }));
+        else _museSay(false, '❌ ' + (r.message || r.detail || '?'));
+    } catch (e) { _museSay(false, '❌ ' + e.message); }
+    btn.disabled = false;
+};
 
 window.testProviderEndpoint = async function(btn) {
     const out = document.getElementById('provider-endpoint-result');

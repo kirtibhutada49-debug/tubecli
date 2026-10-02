@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 VOICE_ENGINES = ("edge", "capcut")
 # = image_gen.PROVIDERS — chép lại để agent.py không phải import bộ vẽ ảnh khi nạp agents.json
-IMAGE_PROVIDERS = ("cloudflare", "gemini", "9router")
+IMAGE_PROVIDERS = ("cloudflare", "gemini", "9router", "muse")
 MEDIA_FIELDS = ("tts_engine", "tts_voice", "image_provider", "image_model")
 
 _VOICE_RE = re.compile(r"^[A-Za-z0-9_.-]{2,64}$")

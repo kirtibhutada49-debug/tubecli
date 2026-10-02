@@ -113,6 +113,19 @@ PROVIDERS = {
         "env_var": "",
         "local": True,
     },
+    # Muse (muse.ai — agent AI của Meta): KHÔNG có khoá. Đi qua phiên trình duyệt đã đăng nhập của một hồ sơ
+    # TubeCLI (tubecli/core/muse.py); base_url là cổng chuẩn OpenAI do chính TubeCLI phục vụ (api/muse_routes.py),
+    # điền lúc nạp vì cổng API của máy đổi được. Viết chữ + vẽ ảnh (2/10/2026).
+    "muse": {
+        "name": "Muse (Meta)",
+        "base_url": "",
+        "models": ["muse-spark"],
+        "env_var": "",
+        "local": True,
+        "browser_session": True,
+        "icon": "🎨",
+        "description": "Meta Muse through a browser profile signed in to muse.ai — chat + images, no API key",
+    },
     "github": {
         "name": "GitHub",
         "base_url": "https://api.github.com",
@@ -167,6 +180,7 @@ PROVIDER_CAPABILITY = {
     "gemini": ["chat"], "openai": ["chat"], "claude": ["chat"], "deepseek": ["chat"],
     "grok": ["chat"], "openrouter": ["chat"], "9router": ["chat"],
     "cloudflare": ["chat", "deploy"],
+    "muse": ["chat", "image"],
     # github, everai: registered but no consumer yet -> [] (nothing reads them)
 }
 
@@ -218,6 +232,22 @@ def is_local_url(url: str) -> bool:
         return False
     return host in _LOCAL_HOSTS or host.startswith("127.")
 
+
+
+def _muse_base_url() -> str:
+    try:
+        from tubecli.core import muse
+        return muse.local_base_url()
+    except Exception:      # noqa: BLE001
+        return "http://127.0.0.1:5295/api/v1/muse/v1"
+
+
+def _muse_profile() -> str:
+    try:
+        from tubecli.core import muse
+        return muse.settings()["profile"]
+    except Exception:      # noqa: BLE001
+        return ""
 
 
 _INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00a0"), None)
@@ -283,6 +313,8 @@ class KeyManager:
                 continue
             custom = ((settings or {}).get(prov) or {}).get("base_url") if isinstance(settings, dict) else ""
             PROVIDERS[prov]["base_url"] = custom or _DEFAULT_BASE_URLS.get(prov, "")
+        if "muse" in PROVIDERS:
+            PROVIDERS["muse"]["base_url"] = _muse_base_url()
 
     def _save(self):
         os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
@@ -352,6 +384,8 @@ class KeyManager:
 
     def get_base_url(self, provider: str) -> str:
         """Endpoint đang dùng: endpoint tự đặt, không có thì mặc định của provider."""
+        if provider == "muse":
+            return _muse_base_url()
         self._load()
         settings = self._keys.get("_settings") or {}
         custom = (settings.get(provider) or {}).get("base_url") if isinstance(settings, dict) else ""
@@ -488,6 +522,10 @@ class KeyManager:
             data = self._fetch_json(self.get_base_url("9router") + "/models",
                                     {"Authorization": f"Bearer {key}"} if key else None)
             return [m.get("id", m.get("name", "")) for m in data.get("data", [])]
+
+        if p == "muse":
+            from tubecli.core import muse
+            return list(muse.CHAT_MODELS)
 
         raise RuntimeError(f"Provider {provider} chưa có API danh sách model.")
 
@@ -717,6 +755,13 @@ class KeyManager:
             # chưa có key thì KHÔNG phải "có sẵn".
             local = bool(prov_info.get("local")) and is_local_url(base)
             has_key = self.get_active_key(prov_id) is not None or local
+            extra = {}
+            if prov_info.get("browser_session"):
+                # Muse không có khoá: "có sẵn" = đã chọn hồ sơ trình duyệt giữ phiên. Đăng nhập còn hay không thì
+                # bảng chọn model hỏi /api/v1/muse/status (mở trình duyệt mới biết — không làm ở đây).
+                prof = _muse_profile()
+                has_key = bool(prof)
+                extra = {"browser_session": True, "profile": prof}
             result.append({
                 "id": prov_id,
                 "name": prov_info["name"],
@@ -737,6 +782,7 @@ class KeyManager:
                 "base_url_editable": prov_id in CUSTOM_BASE_PROVIDERS,
                 "icon": prov_info.get("icon", ""),
                 "description": prov_info.get("description", ""),
+                **extra,
                 # When the model list was fetched from the provider's API, and
                 # whether it is live ("api"), user-edited ("custom") or the
                 # shipped fallback ("builtin") — so the UI can say which.

@@ -5967,6 +5967,11 @@ app.include_router(_app_router)
 from tubecli.api.image_routes import router as _image_router
 app.include_router(_image_router)
 
+# Muse (muse.ai) làm nhà cung cấp AI như 9Router — lái phiên trình duyệt đã đăng nhập (2/10/2026):
+# cài đặt hồ sơ, gọi thử, và cổng chuẩn OpenAI /api/v1/muse/v1 cho chỗ chỉ biết gọi HTTP kiểu OpenAI.
+from tubecli.api.muse_routes import router as _muse_router
+app.include_router(_muse_router)
+
 # Gọi THỬ model chat (nút «Thử gọi» của bảng chọn AI trên Flow, 26/9/2026): đi đúng đường agent đi.
 from tubecli.api.ai_routes import router as _ai_router
 app.include_router(_ai_router)

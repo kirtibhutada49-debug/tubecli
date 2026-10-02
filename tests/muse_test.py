@@ -1,0 +1,360 @@
+# -*- coding: utf-8 -*-
+"""Muse (muse.ai) làm nhà cung cấp AI như 9Router — chữ + ảnh qua phiên trình duyệt đã đăng nhập (2/10/2026).
+
+Kiểm (KHÔNG chạm trình duyệt / Muse thật: ensure_browser, run_tool, chat_completion… đều giả):
+  A. nhận model theo tên; build_prompt (system + yêu cầu, lượt trước thành ngữ cảnh, content dạng list); ảnh data: URI
+  B. chọn chat phụ: dùng lại tới turns_per_chat rồi mở mới; đổi hồ sơ → mở mới; next_state đếm lượt
+  C. parse_tool_output; settings/set_settings (hồ sơ phải có thật, kẹp số lượt)
+  D. ask(): chưa chọn hồ sơ → config; chat phụ hỏng → thử lại với chat mới MỘT lần; lỗi → MuseError đúng kind
+  E. generate_image_bytes → JPEG; trả chữ thay ảnh: từ chối thật → refused, tán chuyện → error
+  F. image_gen: nhà "muse" (có/không hồ sơ), hỏng thì lùi Cloudflare, list_models, không tự chọn muse
+  G. brain: provider rõ ràng, nhận theo tên, openai_compat_params, lỗi thành "[Muse Error] …"
+  H. routes /api/v1/muse: models, chat/completions (thường + stream), mã lỗi theo kind, images/generations, settings
+  I. cloud_api: PROVIDERS/khả năng/has_key theo hồ sơ/base_url; server.py include router; muse_tool.cjs đúng cú pháp
+
+Run:  python tests/muse_test.py
+"""
+import asyncio
+import base64
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
+import tubecli.config as CFG  # noqa: E402
+TMP = Path(tempfile.mkdtemp(prefix="muse_test_"))
+CFG.GLOBAL_SETTINGS_FILE = TMP / "global_settings.json"
+from tubecli.core import muse as M  # noqa: E402
+
+PROFILES = TMP / "profiles"
+(PROFILES / "chayagent").mkdir(parents=True)
+(PROFILES / "other").mkdir()
+(PROFILES / "other_bas").mkdir()
+M._profiles_dir = lambda: str(PROFILES)
+STATE = TMP / "muse_state.json"
+M._state_file = lambda: str(STATE)
+
+PASS = FAIL = 0
+
+
+def ok(cond, label, detail=""):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print("  ok  ", label)
+    else:
+        FAIL += 1
+        print("  FAIL", label, "—", str(detail)[:300])
+
+
+def png_bytes(size=(64, 36), mode="RGB"):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new(mode, size, (200, 100, 50) if mode == "RGB" else (200, 100, 50, 128)).save(buf, "WEBP")
+    return buf.getvalue()
+
+
+# ── A ─────────────────────────────────────────────────────────────────────────
+print("A. model + prompt")
+ok(M.is_muse_model("muse-spark") and M.is_muse_model(" Muse-Image ") and not M.is_muse_model("ag/gemini"),
+   "is_muse_model nhận theo tên")
+p = M.build_prompt([{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Write a title."}])
+ok(p.startswith("[New independent request") and "Instructions:\nBe brief." in p and p.endswith("Request:\nWrite a title."),
+   "system + yêu cầu", p)
+p = M.build_prompt([{"role": "user", "content": "hi"}])
+ok(p.endswith("\n\nhi") and "Request:" not in p, "chỉ một câu hỏi → không nhãn Request", p)
+p = M.build_prompt([{"role": "user", "content": "first"}, {"role": "assistant", "content": "answer one"},
+                    {"role": "user", "content": [{"type": "text", "text": "second"}, {"type": "image_url",
+                                                  "image_url": {"url": "data:image/png;base64,AAAA"}}]}])
+ok("Earlier messages, for context only:\nUser said: first\n\nAssistant said: answer one" in p
+   and p.endswith("Request:\nsecond") and "### USER" not in p, "lượt trước là NGỮ CẢNH, content dạng list", p)
+d = Path(tempfile.mkdtemp(dir=TMP))
+refs = M.images_of([{"role": "user", "content": [{"type": "image_url", "image_url": {
+    "url": "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xffxx").decode()}}]}], str(d))
+ok(len(refs) == 1 and refs[0].endswith(".jpg") and open(refs[0], "rb").read() == b"\xff\xd8\xffxx", "ảnh data: URI → file", refs)
+
+# ── B ─────────────────────────────────────────────────────────────────────────
+print("B. chọn chat phụ")
+ok(M.pick_thread({}, "chayagent", 10) == "new", "chưa có chat → new")
+st = {"profile": "chayagent", "thread": "t1", "turns": 3}
+ok(M.pick_thread(st, "chayagent", 10) == "t1", "còn lượt → dùng lại")
+ok(M.pick_thread({**st, "turns": 10}, "chayagent", 10) == "new", "đủ lượt → new")
+ok(M.pick_thread(st, "other", 10) == "new", "đổi hồ sơ → new")
+ok(M.pick_thread(st, "chayagent", 10, fresh=True) == "new", "fresh → new")
+n = M.next_state(st, "chayagent", "t1", {"thread_id": "t1"})
+ok(n["turns"] == 4 and n["thread"] == "t1", "cùng chat → +1", n)
+n = M.next_state(st, "chayagent", "new", {"thread_id": "t2"})
+ok(n["turns"] == 1 and n["thread"] == "t2", "chat mới → đếm lại 1", n)
+ok(M.next_state(st, "chayagent", "t1", {}) == st, "không có thread_id → giữ nguyên")
+
+# ── C ─────────────────────────────────────────────────────────────────────────
+print("C. tool output + cài đặt")
+r = M.parse_tool_output('noise\n__MUSE_RESULT__{"ok": true, "text": "x"}__MUSE_END__\n')
+ok(r == {"ok": True, "text": "x"}, "bóc kết quả giữa hai dấu", r)
+r = M.parse_tool_output("", "Error: Cannot find module 'playwright'\n")
+ok(not r["ok"] and "Cannot find module" in r["error"], "không có dấu → lỗi kèm dòng stderr cuối", r)
+r = M.parse_tool_output("__MUSE_RESULT__{bad__MUSE_END__")
+ok(not r["ok"] and "bad JSON" in r["error"], "JSON hỏng", r)
+ok(M.settings() == {"profile": "", "turns_per_chat": M.DEFAULT_TURNS_PER_CHAT}, "mặc định: chưa chọn hồ sơ")
+try:
+    M.set_settings(profile="nope")
+    ok(False, "hồ sơ không có → ValueError")
+except ValueError:
+    ok(True, "hồ sơ không có → ValueError")
+try:
+    M.set_settings(profile="../x")
+    ok(False, "tên đi ngược thư mục → ValueError")
+except ValueError:
+    ok(True, "tên đi ngược thư mục → ValueError")
+ok(M.set_settings(profile="chayagent", turns_per_chat=999) == {"profile": "chayagent", "turns_per_chat": M.MAX_TURNS_PER_CHAT},
+   "lưu hồ sơ + kẹp số lượt")
+ok(M.set_settings(turns_per_chat=0)["turns_per_chat"] == 1 and M.settings()["profile"] == "chayagent",
+   "chỉ ghi khoá được truyền; số lượt ≥ 1")
+M.set_settings(turns_per_chat=10)
+ok(M.local_base_url().startswith("http://127.0.0.1:") and M.local_base_url().endswith("/api/v1/muse/v1"), "base url cục bộ")
+
+# ── D ─────────────────────────────────────────────────────────────────────────
+print("D. ask()")
+calls = []
+M.ensure_browser = lambda profile, launch=True: 9222
+
+
+def tool_ok(port, action, req=None, timeout=60):
+    calls.append(dict(req or {}))
+    tid = req["thread"] if req["thread"] != "new" else "T-new-%d" % len(calls)
+    return {"ok": True, "text": "hello", "images": [], "thread_id": tid}
+
+
+M.run_tool = tool_ok
+STATE.write_text("{}", encoding="utf-8")
+r = M.ask("q1")
+ok(r["text"] == "hello" and calls[-1]["thread"] == "new", "lượt đầu mở chat mới", calls[-1])
+M.ask("q2")
+ok(calls[-1]["thread"] == "T-new-1" and json.loads(STATE.read_text())["turns"] == 2, "lượt sau gõ tiếp chat ấy",
+   STATE.read_text())
+
+
+def tool_dead_then_ok(port, action, req=None, timeout=60):
+    calls.append(dict(req or {}))
+    if req["thread"] != "new":
+        return {"ok": False, "kind": "error", "error": "Muse chat box did not appear."}
+    return {"ok": True, "text": "fresh", "images": [], "thread_id": "T-fresh"}
+
+
+M.run_tool = tool_dead_then_ok
+n0 = len(calls)
+r = M.ask("q3")
+ok(r["text"] == "fresh" and [c["thread"] for c in calls[n0:]] == ["T-new-1", "new"]
+   and json.loads(STATE.read_text()) .get("thread") == "T-fresh", "chat phụ hỏng → thử lại chat mới MỘT lần",
+   [c["thread"] for c in calls[n0:]])
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": False, "kind": "auth", "error": "not signed in"}
+try:
+    M.ask("q4")
+    ok(False, "lỗi đăng nhập → MuseError(auth)")
+except M.MuseError as e:
+    ok(e.kind == "auth" and "not signed in" in str(e), "lỗi đăng nhập → MuseError(auth)", e.kind)
+ok(not M._LOCK.locked(), "khoá được nhả sau lỗi")
+M.set_settings(profile="")
+try:
+    M.ask("q5")
+    ok(False, "chưa chọn hồ sơ → config")
+except M.MuseError as e:
+    ok(e.kind == "config" and "Cloud API Keys" in str(e), "chưa chọn hồ sơ → config", e)
+M.set_settings(profile="chayagent")
+
+# ── E ─────────────────────────────────────────────────────────────────────────
+print("E. vẽ ảnh")
+seen_req = {}
+
+
+def tool_img(port, action, req=None, timeout=60):
+    seen_req.update(req)
+    path = os.path.join(req["image_dir"], "muse_x_0.webp")
+    with open(path, "wb") as f:
+        f.write(png_bytes())
+    return {"ok": True, "text": "", "images": [{"path": path, "width": 64, "height": 36}], "thread_id": "T-img"}
+
+
+M.run_tool = tool_img
+data = M.generate_image_bytes("a fox", "9:16")
+ok(data[:3] == b"\xff\xd8\xff", "webp → JPEG", data[:4])
+ok(seen_req.get("want_images") and "Aspect ratio: 9:16 (vertical portrait)." in seen_req["prompt"]
+   and seen_req["prompt"].rstrip().endswith("a fox"), "lời xin ảnh nói khung hình", seen_req.get("prompt"))
+ok("Aspect ratio: 16:9" in M.image_request("x", "7:3"), "khung lạ → 16:9")
+ok("attached image" in M.image_request("x", "1:1", with_refs=True), "có ảnh tham chiếu → nói dùng ảnh đính kèm")
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": True, "text": "Sorry, I can't create that image.",
+                                                         "images": [], "thread_id": "T-img"}
+try:
+    M.generate_image_bytes("x")
+    ok(False, "từ chối → refused")
+except M.MuseError as e:
+    ok(e.kind == "refused", "từ chối thật → refused", e.kind)
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": True, "text": "Which style would you like?",
+                                                         "images": [], "thread_id": "T-img"}
+try:
+    M.generate_image_bytes("x")
+    ok(False, "hỏi lại → error")
+except M.MuseError as e:
+    ok(e.kind == "error" and "Which style" in str(e), "hỏi lại / tán chuyện → error (còn đường lùi)", e.kind)
+
+# ── F ─────────────────────────────────────────────────────────────────────────
+print("F. image_gen")
+from tubecli.core import image_gen as G  # noqa: E402
+
+
+class FakeKM:
+    def get_cloudflare_creds(self, label="default"):
+        return {"api_token": "tok", "account_id": "acc", "email": "", "label": "cf"}
+
+    def get_active_key(self, provider):
+        return None
+
+    def cloudflare_accounts(self):
+        return []
+
+
+G._key_manager = lambda: FakeKM()
+r = G.resolve_provider("muse")
+ok(r["ok"] and r["provider"] == "muse" and r["model"] == "muse-image" and r.get("fallback", {}).get("provider") == "cloudflare",
+   "muse có hồ sơ → ok + lùi Cloudflare", r)
+M.set_settings(profile="")
+r = G.resolve_provider("muse")
+ok(not r["ok"] and "browser profile" in r["reason"], "chưa chọn hồ sơ → không dùng được", r)
+M.set_settings(profile="chayagent")
+ok(G.resolve_provider("")["provider"] == "cloudflare", "tự chọn KHÔNG bốc muse")
+ok("muse" in G.PROVIDERS and G.set_image_settings("muse", "")["provider"] == "muse", "cài đặt chung nhận muse")
+G.set_image_settings("", "")
+ok(asyncio.run(G.list_models("muse")) == ["muse-image"], "list_models muse")
+
+
+async def fake_cf(r, prompt, ar, timeout):
+    return b"\xff\xd8\xffCF"
+
+G._cf_generate_rotating = fake_cf
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": False, "kind": "browser", "error": "browser closed"}
+r = G.resolve_provider("muse")
+data = asyncio.run(G._generate_bytes(r, "x", "16:9"))
+ok(data == b"\xff\xd8\xffCF" and r.get("drew_provider") == "cloudflare" and "Muse" in r.get("fallback_from", ""),
+   "Muse hỏng → vẽ bằng Cloudflare, ghi fallback_from", r.get("fallback_from"))
+M.run_tool = lambda port, action, req=None, timeout=60: {"ok": True, "text": "I cannot draw that, it violates policy.",
+                                                         "images": [], "thread_id": "T"}
+r = G.resolve_provider("muse")
+try:
+    asyncio.run(G._generate_bytes(r, "x", "16:9"))
+    ok(False, "từ chối → không lùi")
+except G.ProviderError as e:
+    ok(e.kind == "refused", "lời từ chối KHÔNG lùi sang nhà khác", e.kind)
+M.run_tool = tool_img
+r = G.resolve_provider("muse")
+data = asyncio.run(G._generate_bytes(r, "x", "16:9"))
+ok(data[:3] == b"\xff\xd8\xff" and not r.get("fallback_from"), "Muse vẽ được → không lùi")
+rk = G.resolve_key("muse")
+ok(rk["ok"] and "fallback" not in rk and rk["provider"] == "muse", "resolve_key muse: không khoá, không lùi", rk)
+from tubecli.core import agent_media  # noqa: E402
+ok("muse" in agent_media.IMAGE_PROVIDERS, "agent_media nhận muse")
+
+# ── G ─────────────────────────────────────────────────────────────────────────
+print("G. brain")
+from tubecli.core.brain import AgentBrain  # noqa: E402
+got = []
+
+
+def fake_chat(messages, model="muse-spark", timeout=300):
+    got.append((model, messages))
+    return "muse says hi"
+
+M.chat_completion = fake_chat
+msgs = [{"role": "user", "content": "hello"}]
+ok(AgentBrain._call_provider("muse", "muse-spark", {}, msgs) == "muse says hi", "provider rõ ràng → Muse")
+ok(AgentBrain._call_llm({"model": "muse-spark", "cloud_api_keys": {}}, msgs) == "muse says hi" and got[-1][0] == "muse-spark",
+   "model muse-* không provider → Muse")
+params = AgentBrain.openai_compat_params({"model": "muse-spark"})
+ok(params and params[0] == M.local_base_url() and params[1] == "muse", "openai_compat_params → cổng cục bộ", params)
+ok(AgentBrain.openai_compat_params({"model": "x", "provider": "muse"})[0] == M.local_base_url(), "provider muse rõ ràng")
+
+
+def bad_chat(messages, model="muse-spark", timeout=300):
+    raise M.MuseError("auth", "not signed in")
+
+M.chat_completion = bad_chat
+res = AgentBrain._call_provider("muse", "muse-spark", {}, msgs)
+ok(res.startswith("[Muse Error]") and "not signed in" in res, "lỗi → chuỗi [Muse Error]", res)
+from tubecli.api.ai_routes import is_llm_error  # noqa: E402
+ok(is_llm_error(res), "nút Thử gọi nhận ra là lỗi")
+M.chat_completion = fake_chat
+
+# ── H ─────────────────────────────────────────────────────────────────────────
+print("H. routes")
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from tubecli.api import muse_routes as R  # noqa: E402
+app = FastAPI()
+app.include_router(R.router)
+c = TestClient(app)
+r = c.get("/api/v1/muse/v1/models").json()
+ok({m["id"] for m in r["data"]} == {"muse-spark", "muse-image"}, "models", r)
+r = c.post("/api/v1/muse/v1/chat/completions", json={"model": "muse-spark", "messages": msgs})
+ok(r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "muse says hi", "chat thường", r.text[:200])
+r = c.post("/api/v1/muse/v1/chat/completions", json={"model": "muse-spark", "messages": msgs, "stream": True})
+deltas = []
+for line in r.text.splitlines():
+    if line.startswith("data: ") and line[6:] != "[DONE]":
+        deltas.append(json.loads(line[6:])["choices"][0]["delta"].get("content", ""))
+ok(r.status_code == 200 and "".join(deltas) == "muse says hi" and r.text.rstrip().endswith("data: [DONE]"),
+   "chat stream ráp lại đúng chữ", r.text[:300])
+M.chat_completion = bad_chat
+r = c.post("/api/v1/muse/v1/chat/completions", json={"model": "muse-spark", "messages": msgs, "stream": True})
+ok(r.status_code == 401 and "not signed in" in r.json()["error"]["message"], "lỗi đăng nhập → 401 TRƯỚC khi mở luồng", r.text)
+M.chat_completion = fake_chat
+ok(c.post("/api/v1/muse/v1/chat/completions", json={"messages": []}).status_code == 400, "thiếu messages → 400")
+ok(R.aspect_from("1792x1024", None) == "16:9" and R.aspect_from("1024x1792", None) == "9:16"
+   and R.aspect_from("1024x1024", None) == "1:1" and R.aspect_from("x", "3:4") == "3:4"
+   and R.aspect_from(None, None) == "16:9", "size/aspect → khung hình")
+ar_seen = []
+M.generate_image_bytes = lambda prompt, ar="16:9", refs=None, timeout=300: ar_seen.append(ar) or b"\xff\xd8\xffIMG"
+r = c.post("/api/v1/muse/v1/images/generations", json={"prompt": "fox", "size": "1024x1792", "n": 2}).json()
+ok(len(r["data"]) == 2 and base64.b64decode(r["data"][0]["b64_json"]) == b"\xff\xd8\xffIMG" and ar_seen == ["9:16", "9:16"],
+   "images/generations n=2, khung 9:16", r)
+r = c.get("/api/v1/muse/settings").json()
+ok(r["profile"] == "chayagent" and r["profiles"] == ["chayagent", "other"], "settings liệt kê hồ sơ (bỏ _bas)", r)
+ok(c.put("/api/v1/muse/settings", json={"profile": "ghost"}).status_code == 400, "PUT hồ sơ không có → 400")
+ok(c.put("/api/v1/muse/settings", json={"turns_per_chat": 5}).json()["turns_per_chat"] == 5, "PUT số lượt")
+M._cdp_port = lambda profile: 0
+r = c.get("/api/v1/muse/status").json()
+ok(r["configured"] and not r["running"] and "background" in r["message"], "status: hồ sơ tắt không phải hỏng", r)
+
+# ── I ─────────────────────────────────────────────────────────────────────────
+print("I. cloud_api + server + driver")
+from tubecli.extensions.cloud_api import extension as X  # noqa: E402
+km = X.KeyManager(data_file=str(TMP / "keys.json"))
+prov = {p["id"]: p for p in km.list_providers()}
+mp = prov.get("muse") or {}
+ok(mp.get("has_key") and mp.get("browser_session") and mp.get("profile") == "chayagent" and mp.get("models") == ["muse-spark"]
+   and mp.get("capabilities") == ["chat", "image"], "thẻ Muse: có sẵn khi đã chọn hồ sơ", mp)
+ok(km.get_base_url("muse") == M.local_base_url() and X.PROVIDERS["muse"]["base_url"] == M.local_base_url(),
+   "base_url = cổng cục bộ (Content Studio đọc PROVIDERS)")
+M.set_settings(profile="")
+ok(not {p["id"]: p for p in km.list_providers()}["muse"]["has_key"], "bỏ chọn hồ sơ → chưa sẵn")
+src = (ROOT / "tubecli" / "api" / "server.py").read_text(encoding="utf-8")
+ok("muse_routes import router" in src and "include_router(_muse_router)" in src, "server.py include router Muse")
+tool = ROOT / "tubecli" / "extensions" / "browser" / "muse_tool.cjs"
+try:
+    chk = subprocess.run(["node", "--check", str(tool)], capture_output=True, text=True, timeout=30)
+    ok(chk.returncode == 0, "muse_tool.cjs đúng cú pháp", chk.stderr)
+except FileNotFoundError:
+    ok(True, "muse_tool.cjs: không có node để kiểm (bỏ qua)")
+js = tool.read_text(encoding="utf-8")
+ok("browser.close()" not in js.replace("TUYỆT ĐỐI không browser.close()", ""), "driver không bao giờ đóng trình duyệt của người dùng")
+
+print(f"\n{PASS} passed, {FAIL} failed")
+sys.exit(1 if FAIL else 0)

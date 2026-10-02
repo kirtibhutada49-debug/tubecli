@@ -36,9 +36,12 @@ NR_DEFAULT_MODEL = "ag/gemini-3.1-flash-image"
 # Bản lùi khi 9Router hỏng/hết quota = model Cloudflare mặc định. KHÔNG dùng flux-2-klein-9b: giấy phép
 # FLUX Non-Commercial của Black Forest Labs — video đăng YouTube kiếm tiền là dùng thương mại (16/9/2026).
 NR_FALLBACK_CF_MODEL = CF_DEFAULT_MODEL
-PROVIDERS = ("cloudflare", "gemini", "9router")
+# Muse (muse.ai, agent của Meta) vẽ qua phiên trình duyệt đã đăng nhập — tubecli/core/muse.py (2/10/2026).
+MUSE_DEFAULT_MODEL = "muse-image"
+PROVIDERS = ("cloudflare", "gemini", "9router", "muse")
 ASPECT_RATIOS = ("16:9", "9:16", "1:1", "4:3", "3:4")
-DEFAULT_MODELS = {"cloudflare": CF_DEFAULT_MODEL, "gemini": GEMINI_DEFAULT_MODEL, "9router": NR_DEFAULT_MODEL}
+DEFAULT_MODELS = {"cloudflare": CF_DEFAULT_MODEL, "gemini": GEMINI_DEFAULT_MODEL, "9router": NR_DEFAULT_MODEL,
+                  "muse": MUSE_DEFAULT_MODEL}
 # 429 của Cloudflare KHÔNG phải hết hạn mức ngày (giới hạn theo phút / quá tải): đỗ ngắn rồi dùng lại, không 15 phút.
 CF_RATE_COOLDOWN_SEC = 60
 # Mọi account đều đang đỗ nhưng có account mở lại trong chừng này giây → chờ rồi vẽ tiếp, thay vì bỏ cả lô.
@@ -201,6 +204,24 @@ def resolve_provider(provider: Optional[str] = None, model: Optional[str] = None
             out["fallback"] = fb
         return out
 
+    def _muse(m=None):
+        m = m or MUSE_DEFAULT_MODEL
+        try:
+            from tubecli.core import muse
+            prof = muse.settings()["profile"]
+        except Exception as e:      # noqa: BLE001
+            return {"ok": False, "provider": "muse", "model": m, "reason": f"Muse is unavailable on this TubeCLI ({e})."}
+        if not prof:
+            return {"ok": False, "provider": "muse", "model": m,
+                    "reason": "Muse is not set up: pick the browser profile signed in to muse.ai in Cloud API Keys → Muse."}
+        out = {"ok": True, "provider": "muse", "model": m, "label": prof, "reason": ""}
+        # Muse chậm và đi qua MỘT phiên trình duyệt — hỏng giữa lô (trình duyệt bị đóng, Muse trả lời bằng chữ)
+        # thì vẽ tiếp bằng Cloudflare như đường lùi của 9Router, ghi rõ fallback_from.
+        fb = _cloudflare(NR_FALLBACK_CF_MODEL)
+        if fb["ok"]:
+            out["fallback"] = fb
+        return out
+
     p = provider
     if p == "cloudflare":
         return _cloudflare(model)
@@ -208,9 +229,11 @@ def resolve_provider(provider: Optional[str] = None, model: Optional[str] = None
         return _gemini(model)
     if p == "9router":
         return _ninerouter(model)
+    if p == "muse":
+        return _muse(model)
     if p not in ("", "auto"):
         return {"ok": False, "provider": p, "model": model or "",
-                "reason": f"Không biết nhà cung cấp ảnh '{p}'. Chỉ hỗ trợ: cloudflare, gemini, 9router "
+                "reason": f"Không biết nhà cung cấp ảnh '{p}'. Chỉ hỗ trợ: {', '.join(PROVIDERS)} "
                           f"(hoặc để trống để tự chọn)."}
     cf = _cloudflare(model)
     if cf["ok"]:
@@ -513,6 +536,20 @@ async def _nr_generate(r: dict, prompt: str, aspect_ratio: str, timeout: int) ->
     return nr_image_bytes(ct, raw)
 
 
+# ── Muse (muse.ai) ────────────────────────────────────────────────────────────
+# Đo thật 2/10/2026: 16:9 → 2048×1152, 9:16 → 1152×2048, 25–30 s/ảnh; khung hình nói bằng chữ trong lời xin.
+
+async def _muse_generate(r: dict, prompt: str, aspect_ratio: str, reference_images, timeout: int) -> bytes:
+    from tubecli.core import muse
+    try:
+        # Trần thời gian tính TỪ LÚC tới lượt (Muse xếp hàng từng lượt) — lô ảnh gửi song song vẫn đi hết.
+        return await asyncio.to_thread(muse.generate_image_bytes, prompt, aspect_ratio, reference_images,
+                                       max(int(timeout or 0), 180))
+    except muse.MuseError as e:
+        # Không có khoá nào để đỗ/xoay: mọi lỗi là "error" (→ đường lùi), trừ lời từ chối nội dung.
+        raise ProviderError("refused" if e.kind == "refused" else "error", f"Muse: {e}") from e
+
+
 # ── vẽ ────────────────────────────────────────────────────────────────────────
 
 _sleep = asyncio.sleep
@@ -611,6 +648,8 @@ async def _generate_bytes(r: dict, prompt: str, aspect_ratio: str = "16:9",
             return await _cf_generate_rotating(r, prompt, aspect_ratio, timeout)
         if r["provider"] == "9router":
             return await _nr_generate(r, prompt, aspect_ratio, timeout)
+        if r["provider"] == "muse":
+            return await _muse_generate(r, prompt, aspect_ratio, reference_images, timeout)
         return await _gemini_generate(r, prompt, aspect_ratio, reference_images, timeout)
     except ProviderError as e:
         # Cloudflare: đỗ + xoay qua MỌI account đã làm trong _cf_generate_rotating. Gemini: như cũ.
@@ -813,6 +852,11 @@ def resolve_key(provider: str, label: str = "default", model: Optional[str] = No
                 "reason": f"'{p}' is not an image provider — image tests work for: {', '.join(PROVIDERS)}."}
     cfg = image_settings()
     m = (model or "").strip() or (cfg["model"] if cfg["provider"] == p else "") or DEFAULT_MODELS[p]
+    if p == "muse":
+        # Muse không có khoá: "khoá" là hồ sơ trình duyệt đã chọn. Không lùi nhà khác.
+        r = resolve_provider("muse", m)
+        r.pop("fallback", None)
+        return {**r, "label": r.get("label") or label, "_rotated": True}
     entry = _key_manager().get_key_entry(p, label)
     if not entry or not entry.get("key"):
         return {"ok": False, "provider": p, "model": m, "label": label,
@@ -885,6 +929,8 @@ async def test_key_draw(provider: str, label: str = "default", model: Optional[s
                 data = await _cf_generate(r, KEY_TEST_PROMPT, "1:1", timeout)       # một account, không xoay
             elif r["provider"] == "gemini":
                 data = await _gemini_generate(r, KEY_TEST_PROMPT, "1:1", None, timeout)
+            elif r["provider"] == "muse":
+                data = await _muse_generate(r, KEY_TEST_PROMPT, "1:1", None, timeout)
             else:
                 data = await _nr_generate(r, KEY_TEST_PROMPT, "1:1", timeout)       # không lùi sang Cloudflare
             if not data:
@@ -1003,6 +1049,8 @@ async def list_models(provider: str) -> list:
         except Exception as e:
             logger.warning("list_models 9router: %s", e)
         return [NR_DEFAULT_MODEL] + [m for m in found if m != NR_DEFAULT_MODEL]
+    if p == "muse":
+        return [MUSE_DEFAULT_MODEL]
     if p == "gemini":
         key = _key_manager().get_active_key("gemini")
         if not key:

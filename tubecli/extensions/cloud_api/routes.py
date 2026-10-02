@@ -237,6 +237,15 @@ async def api_test_provider_model(provider: str, req: TestModelRequest):
         if isinstance(res, str) and res.startswith("[Cloudflare Error]"):
             raise HTTPException(400, res)
         return {"status": "success", "response": res}
+    # Muse không có khoá — đi qua phiên trình duyệt của hồ sơ đã chọn (tubecli/core/muse.py).
+    if prov == "muse":
+        import asyncio
+        from tubecli.core import muse
+        try:
+            res = await asyncio.to_thread(muse.chat_completion, [{"role": "user", "content": req.prompt}], req.model)
+        except muse.MuseError as e:
+            raise HTTPException(400 if e.kind in ("config", "auth") else 502, f"Muse: {e}")
+        return {"status": "success", "response": res}
 
     key = key_manager.get_active_key(provider)
     if not key:

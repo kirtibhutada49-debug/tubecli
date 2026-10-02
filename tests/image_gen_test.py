@@ -150,7 +150,7 @@ ok(c.put("/api/v1/images/settings", json={"provider": "dalle"}).status_code == 4
 r = c.get("/api/v1/images/models?provider=cloudflare").json()
 ok(r == {"models": {"cloudflare": ["@cf/a", "@cf/b"]}}, "GET models theo nhà", r)
 r = c.get("/api/v1/images/models").json()
-ok(set(r["models"]) == {"cloudflare", "gemini", "9router"}, "GET models không nhà → cả ba")
+ok(set(r["models"]) == {"cloudflare", "gemini", "9router", "muse"}, "GET models không nhà → cả bốn (có Muse, 2/10/2026)")
 r = c.post("/api/v1/images/test", json={"provider": "cloudflare", "model": "@cf/a"}).json()
 ok(r["ok"] is True and r["provider"] == "cloudflare" and r["model"] == "@cf/a" and calls[-1][2] == "1:1", "POST test: vẽ 1:1 thật, ok True", r)
 ok(not [f for f in os.listdir(G.shared_output_dir()) if f.startswith("_probe_")], "file thử đã xoá")

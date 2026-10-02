@@ -68,6 +68,12 @@ _OPENAI_COMPAT_BASES = {
 }
 
 
+def _is_muse_model(model) -> bool:
+    """Model của Muse (muse.ai)? Cùng luật với tubecli.core.muse.is_muse_model — chép ở đây để brain không phải
+    nạp mô-đun Muse cho mọi lượt gọi."""
+    return str(model or "").strip().lower().startswith("muse")
+
+
 def is_9router_model(model: str) -> bool:
     """Model này của 9Router? Nhận theo TÊN nên không cần nó đang chạy.
 
@@ -1147,6 +1153,10 @@ Rules:
         provider = str(agent.get("provider") or "").strip().lower()
         if provider == "chatgpt":
             provider = "openai"
+        if provider == "muse" or (not provider and _is_muse_model(model)):
+            # Muse đi qua phiên trình duyệt; cổng chuẩn OpenAI của nó do chính TubeCLI phục vụ, không cần khoá.
+            from tubecli.core import muse
+            return (muse.local_base_url(), "muse", model)
         if not provider:
             low = model.lower()
             if is_9router_model(model):
@@ -1232,6 +1242,10 @@ Rules:
         lower_model = model.lower()
         is_9router = False
         is_openrouter = False
+
+        # Muse (muse.ai): "muse-spark" — nhận theo tên như 9Router, model mặc định của máy không mang provider.
+        if _is_muse_model(model):
+            return AgentBrain._call_muse(model, messages)
 
         # Cloudflare Workers AI ids look like "@cf/meta/llama-3.3-70b...". They
         # contain a slash, so this MUST come before the slash rule below or they
@@ -1427,6 +1441,8 @@ Rules:
             return AgentBrain._call_openai(model, key or "9router", messages, base_url=_9r_base(), temperature=temperature)
         if p == "cloudflare":
             return AgentBrain._call_cloudflare(model, messages, temperature=temperature)
+        if p == "muse":
+            return AgentBrain._call_muse(model, messages)
 
         # Any other OpenAI-compatible provider declared in the cloud_api registry.
         try:
@@ -1808,6 +1824,19 @@ Rules:
             data = resp.json()
             return "\n".join(b["text"] for b in data.get("content", []) if b["type"] == "text")
         except Exception as e: return f"[Claude Error] {e}"
+
+    @staticmethod
+    def _call_muse(model: str, messages: List[Dict]) -> str:
+        """Muse (muse.ai) qua phiên trình duyệt đã đăng nhập — gọi THẲNG lõi, không qua cổng HTTP của chính
+        máy (brain chạy được cả trong vòng sự kiện của server: tự gọi HTTP vào mình ở đó là treo).
+        Lỗi trả về dạng chuỗi "[Muse Error] …" như các nhà khác."""
+        from tubecli.core import muse
+        try:
+            return muse.chat_completion(messages, model or muse.CHAT_MODEL)
+        except muse.MuseError as e:
+            return f"[Muse Error] {e}"
+        except Exception as e:      # noqa: BLE001
+            return f"[Muse Error] {type(e).__name__}: {e}"
 
     @staticmethod
     def _call_cloudflare(model: str, messages: List[Dict], temperature: float = 0.7) -> str:
