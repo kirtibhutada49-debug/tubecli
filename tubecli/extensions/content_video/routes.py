@@ -223,6 +223,10 @@ class RetryWithRequest(BaseModel):
     tts_engine: str = ""
     tts_voice: str = ""            # rỗng = giọng của mẫu / task
     capcut_email: str = ""
+    # Google Drive (2/10/2026): None = giữ như task; True/False = bật/tắt; token = tài khoản người dùng chọn.
+    drive: Optional[bool] = None
+    drive_token_id: str = ""
+    drive_public: Optional[bool] = None
 
 
 @router.get("/tasks/{task_id}/retry")
@@ -251,7 +255,8 @@ async def retry_start(task_id: str, req: RetryWithRequest, request: Request):
 
     try:
         task = await asyncio.to_thread(retry_with, task_id, req.text_model, req.image_model, req.redraw_images,
-                                       req.tts_engine, req.tts_voice, req.capcut_email, "user:web")
+                                       req.tts_engine, req.tts_voice, req.capcut_email, "user:web",
+                                       req.drive, req.drive_token_id, req.drive_public)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"status": "queued", "task": task}

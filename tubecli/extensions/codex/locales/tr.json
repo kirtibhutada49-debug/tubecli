@@ -331,5 +331,16 @@
   "codex.action_more": "Diğer",
   "codex.action_accept_plan": "Onayla → işle",
   "codex.section_details": "Ayrıntılar",
-  "codex.details_hint": "hedef · onay · yapay zekâ planı · kimlikler"
+  "codex.details_hint": "hedef · onay · yapay zekâ planı · kimlikler",
+  "codex.retry_drive_hint": "Başlık adında bir klasör: tablo, video, görseller ve ses. Yalnızca eksik dosyalar yüklenir.",
+  "codex.retry_reauth": "Yeniden yetkilendir",
+  "codex.retry_drive_failed": "Geçen sefer Google Drive'a kaydetme başarısız oldu:",
+  "codex.retry_drive_auth_failed": "Geçen sefer Google Drive erişimi reddetti — hesabı yeniden yetkilendirin veya başka bir hesap seçin:",
+  "codex.retry_drive_reauth_needed": "Bu hesabın yeniden yetkilendirilmesi gerekiyor — «Yeniden yetkilendir»e basın",
+  "codex.retry_drive_same_folder": "Geçen seferki klasörün aynısına yüklenir",
+  "codex.retry_drive_new_folder": "Başka hesap: o Drive'da yeni bir klasör oluşturulur",
+  "codex.retry_reauth_waiting": "Açılan pencerede {email} için yetkilendirmeyi tamamlayın — yeni erişim kendiliğinden alınır.",
+  "codex.retry_reauth_open": "Google sayfasını aç",
+  "codex.retry_reauth_done": "Yeniden yetkilendirildi: {email} — Yeniden dene'ye basın.",
+  "codex.retry_reauth_gave_up": "Yeni erişim gelmedi — pencere kapandı ya da Google reddetti. Tekrar deneyin veya başka bir hesap seçin."
 }

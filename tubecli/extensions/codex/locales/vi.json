@@ -331,5 +331,16 @@
   "codex.action_more": "Thêm",
   "codex.action_accept_plan": "Duyệt → dựng video",
   "codex.section_details": "Chi tiết",
-  "codex.details_hint": "mục tiêu · duyệt · kế hoạch AI · mã"
+  "codex.details_hint": "mục tiêu · duyệt · kế hoạch AI · mã",
+  "codex.retry_drive_hint": "Thư mục mang tên tiêu đề, gồm Sheet, video, ảnh và giọng. Chỉ tải những file còn thiếu.",
+  "codex.retry_reauth": "Cấp quyền lại",
+  "codex.retry_drive_failed": "Lần trước lưu lên Google Drive bị lỗi:",
+  "codex.retry_drive_auth_failed": "Lần trước Google Drive từ chối quyền — hãy cấp quyền lại cho tài khoản hoặc chọn tài khoản khác:",
+  "codex.retry_drive_reauth_needed": "Tài khoản này cần cấp quyền lại — bấm «Cấp quyền lại»",
+  "codex.retry_drive_same_folder": "Tải vào đúng thư mục lần trước",
+  "codex.retry_drive_new_folder": "Tài khoản khác: tạo thư mục mới trên Drive đó",
+  "codex.retry_reauth_waiting": "Cấp quyền cho {email} trong cửa sổ vừa mở — hộp này tự nhận quyền mới.",
+  "codex.retry_reauth_open": "Mở trang Google",
+  "codex.retry_reauth_done": "Đã cấp quyền lại: {email} — bấm Chạy lại.",
+  "codex.retry_reauth_gave_up": "Chưa nhận được quyền mới — cửa sổ đã đóng hoặc Google từ chối. Thử lại hoặc chọn tài khoản khác."
 }

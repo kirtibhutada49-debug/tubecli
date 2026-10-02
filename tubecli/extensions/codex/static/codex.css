@@ -849,3 +849,19 @@ body {
     .cx-now { top: 60px; }
     .cx-filter select { max-width: 130px; }
 }
+
+/* ── Hộp Chạy lại: Google Drive + cấp quyền lại (2/10/2026) ─────────────────────────────────────────── */
+.cx-rt-drive-wrap { display: grid; gap: 4px; }
+.cx-rt-drive-wrap.hidden { display: none; }
+.cx-rt-drive-pick { display: flex; gap: 8px; align-items: center; }
+.cx-rt-drive-pick select { flex: 1; min-width: 0; }
+.cx-rt-drive-pick .cx-btn { white-space: nowrap; flex: none; }
+.cx-rt-drive-alert { display: grid; gap: 4px; margin: 4px 0 10px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--cx-orange) 45%, var(--border));
+  background: color-mix(in srgb, var(--cx-orange) 9%, transparent); font-size: 12.5px; line-height: 1.45; }
+.cx-rt-drive-alert.cx-rt-drive-alert-auth { border-color: color-mix(in srgb, var(--cx-red) 50%, var(--border));
+  background: color-mix(in srgb, var(--cx-red) 9%, transparent); }
+.cx-rt-drive-alert strong { font-weight: 600; }
+.cx-rt-drive-alert span { overflow-wrap: anywhere; }
+.cx-rt-reauth-ok { color: var(--cx-green, #22c55e); font-weight: 600; }
+.cx-rt-reauth-wait a { font-weight: 600; }

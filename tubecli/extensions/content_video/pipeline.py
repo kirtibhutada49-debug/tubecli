@@ -6920,9 +6920,9 @@ def _drive_save(state: Dict, options: Dict) -> None:
     say, cancelled = state["_say"], state["_cancelled"]
     if not _data_file(state.get("video_path")):
         raise RuntimeError("Nothing to save — the render step produced no video file.")
-    tok = DX.resolve_token(str(options.get("drive_token_id") or ""),
-                           granted_auth_creds(getattr(state.get("agent"), "system_prompt", "") or ""),
-                           strict=_drive_strict(state))
+    want = str(options.get("drive_token_id") or "")
+    tok = DX.resolve_token(want, granted_auth_creds(getattr(state.get("agent"), "system_prompt", "") or ""),
+                           strict=_drive_strict(state) and not (want and want == state.get("drive_user_token")))
     token_id, who = str(tok.get("token_id") or ""), DX.token_label(tok)
     say("drive", "running", f"connecting to Google Drive as {who}")
     drive, sheets = DX.services(token_id)
@@ -6933,8 +6933,9 @@ def _drive_save(state: Dict, options: Dict) -> None:
     root_name = _drive_root_name()
     root = DX.find_or_create_folder(drive, "root", root_name)
     # Thư mục của lượt trước chỉ dùng lại khi CÙNG tài khoản và còn đó (người dùng có thể đã xoá nó).
-    folder = (DX.file_alive(drive, rec["folder_id"])
-              if rec.get("folder_id") and rec.get("token_id") == token_id else None)
+    # Cấp quyền lại sinh token MỚI cho cùng tài khoản Google (Auth Manager) — cùng email thì vẫn là thư mục ấy.
+    same = rec.get("token_id") == token_id or ("@" in who and str(rec.get("email") or "").lower() == who.lower())
+    folder = DX.file_alive(drive, rec["folder_id"]) if rec.get("folder_id") and same else None
     parents = list((folder or {}).get("parents") or [])
     if folder and root["id"] not in parents and parents:
         # Project tải trước bản này nằm ngay gốc My Drive → dời vào thư mục của máy. Người dùng đã tự dời nó
@@ -7349,6 +7350,8 @@ def _prepare(payload: Dict[str, Any], report, is_cancelled, needs: tuple) -> Dic
     task_id = str(payload.get("task_id") or "")
     state: Dict[str, Any] = {
         "agent": agent, "profiles": _agent_scope(agent), "task_id": task_id,
+        # Tài khoản Drive NGƯỜI DÙNG tự chọn ở hộp Chạy lại (xem retry_with / _drive_save).
+        "drive_user_token": str(payload.get("drive_user_token") or ""),
         "checkpoint": _read_checkpoint(task_id), "corpus": [], "videos": [],
         "warnings": [], "_say": say, "_cancelled": cancelled, "_needs": needs,
         "_attempt_started": time.time(),    # mốc «tài sản của lượt NÀY» — xem _step_render
@@ -8315,6 +8318,7 @@ def retry_info(task_id: str) -> Dict[str, Any]:
     roles = pmeta.get("image_models") if isinstance(pmeta.get("image_models"), dict) else {}
     plan_only = kind in (KIND_PLAN, "content_video.digest")
     return {**base, "ok": True, "language": language, "plan_only": plan_only,
+            "drive": _retry_drive_now(task, options, ck, agent),
             "text": {"agent": str(getattr(agent, "model", "") or ""), "override": str(ov.get("text_model") or "")},
             "image": {"machine": machine_img, "roles": {k: str(v) for k, v in roles.items() if v},
                       "override": str(ov.get("image_model") or "")},
@@ -8322,6 +8326,47 @@ def retry_info(task_id: str) -> Dict[str, Any]:
                       "override": {k: str(ov.get(k) or "") for k in ("tts_engine", "tts_voice", "capcut_email")}
                       if ov.get("tts_voice") else {}},
             "drawn": bool(ck.get("episode_id"))}
+
+
+# Lỗi Drive nói về QUYỀN (cấp quyền lại mới hết) chứ không phải lỗi mạng/Google 500: chữ của DriveExportError
+# («authorize … again», «revoked», «expired», «can only read», «not granted») + lỗi gốc của Google khi refresh_token
+# chết (invalid_grant, 401, insufficientPermissions).
+_DRIVE_AUTH_RE = re.compile(
+    r"authori[sz]e\b.*\bagain|revoked|has expired|could not be refreshed|can only read|not granted|"
+    r"no longer in auth manager|no google account with drive|invalid_grant|unauthori[sz]ed|\b401\b|"
+    r"insufficient(?:permissions|_scope| authentication)|access_denied|invalid_scope", re.I)
+
+
+def drive_auth_problem(text: str) -> bool:
+    return bool(_DRIVE_AUTH_RE.search(str(text or "")))
+
+
+def _retry_drive_now(task: Dict[str, Any], options: Dict[str, Any], ck: Dict[str, Any], agent) -> Dict[str, Any]:
+    """Phần Drive của hộp Retry (user 2/10/2026: «retry thiếu chọn drive, khi lỗi auth không có chỗ để cấp quyền
+    lại»): đang bật không, tài khoản nào, quyền thư mục, lần trước lưu đi đâu, và lỗi lần trước có phải lỗi QUYỀN."""
+    try:
+        from tubecli.core.agent import granted_auth_creds
+        granted = granted_auth_creds(getattr(agent, "system_prompt", "") or "")
+    except Exception:           # noqa: BLE001
+        granted = []
+    rec = ck.get("drive") if isinstance(ck.get("drive"), dict) else {}
+    token_id = str(options.get("drive_token_id") or rec.get("token_id") or "")
+    if not token_id and options.get("drive"):
+        # Task không chọn tài khoản (dùng tài khoản đã cấp cho agent) và hỏng TRƯỚC khi kịp ghi sổ: tài khoản ấy chính
+        # là cái bước Drive sẽ chọn lại — nói ra để hộp nhắc cấp quyền lại đúng người.
+        try:
+            from tubecli.extensions.content_video import drive_export as _DX
+            token_id = str(_DX.resolve_token("", granted, strict=False).get("token_id") or "")
+        except Exception:       # noqa: BLE001 — không tài khoản nào hợp: hộp tự chọn như form tạo task
+            token_id = ""
+    err = str(task.get("error") or "")
+    drive_err = err if re.search(r"google drive|auth manager|drive access", err, re.I) else ""
+    return {"on": bool(options.get("drive")),
+            "token_id": token_id,
+            "public": _truthy(options.get("drive_public"), True),
+            "folder_url": str(rec.get("folder_url") or ""), "email": str(rec.get("email") or ""),
+            "error": drive_err[:500], "auth_error": drive_auth_problem(drive_err),
+            "granted": [str(c) for c in granted], "agent": str(getattr(agent, "name", "") or "")}
 
 
 def retry_model_choices() -> Dict[str, Any]:
@@ -8360,7 +8405,9 @@ def retry_model_choices() -> Dict[str, Any]:
 
 
 def retry_with(task_id: str, text_model: str = "", image_model: str = "", redraw_images: bool = False,
-               tts_engine: str = "", tts_voice: str = "", capcut_email: str = "", actor: str = "user") -> Dict[str, Any]:
+               tts_engine: str = "", tts_voice: str = "", capcut_email: str = "", actor: str = "user",
+               drive: Optional[bool] = None, drive_token_id: str = "",
+               drive_public: Optional[bool] = None) -> Dict[str, Any]:
     """Chạy lại task với lựa chọn của hộp Retry. Rỗng = như mặc định (model agent / model mẫu–máy / giọng mẫu).
 
     Ghi một event payload MỚI (bản sao đầy đủ của payload cũ + `retry_overrides`) TRƯỚC khi retry — executor đọc
@@ -8394,12 +8441,45 @@ def retry_with(task_id: str, text_model: str = "", image_model: str = "", redraw
         ov["redraw_images"] = uuid.uuid4().hex[:12]
     elif old.get("redraw_images"):
         ov["redraw_images"] = old["redraw_images"]      # mã cũ đã dùng rồi — giữ để lượt này không vẽ lại lần nữa
-    if ov != old:
+    # Drive: lựa chọn của hộp đổi THẲNG options của task (mọi loại task đọc options từ payload) — lượt chạy lại và
+    # các lần Retry sau dùng đúng tài khoản ấy. Người bấm chọn tài khoản ⇒ ghi `drive_user_token`: task do AI/lịch tạo
+    # vẫn dùng được tài khoản người dùng tự chọn (luật «chỉ tài khoản đã cấp» chỉ chặn việc KHÔNG có người bấm).
+    opts = dict(payload.get("options") or {})
+    new_opts = dict(opts)
+    drive_said = ""
+    if drive is not None:
+        new_opts["drive"] = bool(drive)
+        if drive:
+            tid = str(drive_token_id or "").strip()
+            if len(tid) > 200:
+                raise ValueError("Value too long.")
+            if tid:
+                from tubecli.extensions.content_video import drive_export as _DX
+                tok = next((t for t in _DX.google_tokens() if t.get("token_id") == tid), None)
+                if not tok:
+                    raise ValueError("That Google account is no longer in Auth Manager — authorize it again.")
+                if not _DX.can_write(tok.get("scopes")):
+                    raise ValueError(f"{_DX.token_label(tok)} can only read Google Drive — authorize it again "
+                                     "with the Google Drive scope.")
+                new_opts["drive_token_id"] = tid
+                drive_said = f"drive={_DX.token_label(tok)}"
+            if drive_public is not None:
+                new_opts["drive_public"] = bool(drive_public)
+        else:
+            drive_said = "drive=off"
+    user_tok = str(new_opts.get("drive_token_id") or "") if (drive and drive_token_id) else str(
+        payload.get("drive_user_token") or "")
+    if ov != old or new_opts != opts or user_tok != str(payload.get("drive_user_token") or ""):
         payload["retry_overrides"] = ov
+        payload["options"] = new_opts
+        if user_tok:
+            payload["drive_user_token"] = user_tok
         payload["task_id"] = str(info["task_id"])
         said = ", ".join(f"{k}={v}" for k, v in ov.items() if k not in ("capcut_email", "redraw_images"))
         if ov.get("redraw_images") and ov.get("redraw_images") != old.get("redraw_images"):
             said = (said + ", " if said else "") + "redraw every picture"
+        if drive_said and new_opts != opts:
+            said = (said + ", " if said else "") + drive_said
         codex_manager.append_event(str(info["task_id"]), "log",
                                    f"Retry with: {said or 'the defaults again'}", actor=actor, data=payload)
     return codex_manager.retry(str(info["task_id"]), actor=actor)

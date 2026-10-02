@@ -331,5 +331,16 @@
   "codex.action_more": "その他",
   "codex.action_accept_plan": "承認 → レンダリング",
   "codex.section_details": "詳細",
-  "codex.details_hint": "目標・承認・AI プラン・ID"
+  "codex.details_hint": "目標・承認・AI プラン・ID",
+  "codex.retry_drive_hint": "タイトル名のフォルダに、シート・動画・画像・音声を保存します。足りないファイルだけアップロードします。",
+  "codex.retry_reauth": "再認証",
+  "codex.retry_drive_failed": "前回 Google ドライブへの保存に失敗しました:",
+  "codex.retry_drive_auth_failed": "前回 Google ドライブにアクセスを拒否されました — アカウントを再認証するか、別のアカウントを選んでください:",
+  "codex.retry_drive_reauth_needed": "このアカウントは再認証が必要です — 「再認証」を押してください",
+  "codex.retry_drive_same_folder": "前回と同じフォルダにアップロードします",
+  "codex.retry_drive_new_folder": "別のアカウント: そのドライブに新しいフォルダを作ります",
+  "codex.retry_reauth_waiting": "開いたウィンドウで {email} の認証を完了してください — 新しいアクセスは自動で反映されます。",
+  "codex.retry_reauth_open": "Google のページを開く",
+  "codex.retry_reauth_done": "再認証しました: {email} — 「再実行」を押してください。",
+  "codex.retry_reauth_gave_up": "新しいアクセスが届きませんでした — ウィンドウが閉じられたか Google が拒否しました。もう一度試すか別のアカウントを選んでください。"
 }

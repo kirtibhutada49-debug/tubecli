@@ -512,6 +512,33 @@
           <select id="cx-rt-voice"></select>
           <div class="cx-field-meta cx-len-hint" data-i18n="codex.retry_voice_hint">Only scenes without a voice are read; scenes that already have one keep it.</div>
         </div>
+        <!-- Google Drive như form tạo task + cấp quyền lại ngay tại đây khi lần trước hỏng vì quyền (2/10/2026). -->
+        <div class="cx-rt-drive-alert hidden" id="cx-rt-drive-alert" role="alert"></div>
+        <label class="cx-check">
+          <input type="checkbox" id="cx-rt-drive" onchange="CODEX.onRetryDrive()">
+          <span>
+            <strong data-i18n="codex.field_video_drive">Save to Google Drive</strong>
+            <em data-i18n="codex.retry_drive_hint">A folder named after the title with the Sheet, video, images and voice. Only files that are missing are uploaded.</em>
+          </span>
+        </label>
+        <div class="cx-rt-drive-wrap hidden" id="cx-rt-drive-wrap">
+          <div class="cx-field">
+            <label for="cx-rt-drive-token" data-i18n="codex.field_video_drive_account">Google account for Drive</label>
+            <div class="cx-rt-drive-pick">
+              <select id="cx-rt-drive-token" onchange="CODEX.onRetryDriveToken()"></select>
+              <button type="button" class="cx-btn cx-btn-sm" id="cx-rt-reauth" onclick="CODEX.retryReauth()"
+                      data-i18n="codex.retry_reauth">Authorize again</button>
+            </div>
+            <div class="cx-field-meta cx-len-hint" id="cx-rt-drive-hint" aria-live="polite"></div>
+          </div>
+          <div class="cx-field">
+            <label for="cx-rt-drive-share" data-i18n="codex.field_video_drive_share">Who can open the folder</label>
+            <select id="cx-rt-drive-share">
+              <option value="public" data-i18n="codex.cv_drive_share_public">Anyone with the link — view and download</option>
+              <option value="private" data-i18n="codex.cv_drive_share_private">Only this Google account</option>
+            </select>
+          </div>
+        </div>
       </div>
     </div>
     <div class="cx-modal-foot cx-modal-foot-wrap">

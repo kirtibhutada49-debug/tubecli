@@ -331,5 +331,16 @@
   "codex.action_more": "더 보기",
   "codex.action_accept_plan": "승인 → 렌더링",
   "codex.section_details": "상세",
-  "codex.details_hint": "목표 · 승인 · AI 계획 · ID"
+  "codex.details_hint": "목표 · 승인 · AI 계획 · ID",
+  "codex.retry_drive_hint": "제목 이름의 폴더에 시트, 영상, 이미지, 음성을 저장합니다. 빠진 파일만 업로드합니다.",
+  "codex.retry_reauth": "다시 인증",
+  "codex.retry_drive_failed": "지난번 Google 드라이브 저장에 실패했습니다:",
+  "codex.retry_drive_auth_failed": "지난번 Google 드라이브가 접근을 거부했습니다 — 계정을 다시 인증하거나 다른 계정을 선택하세요:",
+  "codex.retry_drive_reauth_needed": "이 계정은 다시 인증해야 합니다 — «다시 인증»을 누르세요",
+  "codex.retry_drive_same_folder": "지난번과 같은 폴더에 업로드합니다",
+  "codex.retry_drive_new_folder": "다른 계정: 그 드라이브에 새 폴더를 만듭니다",
+  "codex.retry_reauth_waiting": "열린 창에서 {email} 인증을 마치세요 — 새 권한은 자동으로 반영됩니다.",
+  "codex.retry_reauth_open": "Google 페이지 열기",
+  "codex.retry_reauth_done": "다시 인증됨: {email} — 다시 실행을 누르세요.",
+  "codex.retry_reauth_gave_up": "새 권한이 들어오지 않았습니다 — 창이 닫혔거나 Google이 거부했습니다. 다시 시도하거나 다른 계정을 선택하세요."
 }

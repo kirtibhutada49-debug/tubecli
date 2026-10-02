@@ -331,5 +331,16 @@
   "codex.action_more": "More",
   "codex.action_accept_plan": "Approve → render",
   "codex.section_details": "Details",
-  "codex.details_hint": "goal · approval · AI plan · ids"
+  "codex.details_hint": "goal · approval · AI plan · ids",
+  "codex.retry_drive_hint": "A folder named after the title with the Sheet, video, images and voice. Only files that are missing are uploaded.",
+  "codex.retry_reauth": "Authorize again",
+  "codex.retry_drive_failed": "Saving to Google Drive failed last time:",
+  "codex.retry_drive_auth_failed": "Google Drive refused access last time — authorize the account again or pick another one:",
+  "codex.retry_drive_reauth_needed": "This account needs to be authorized again — press «Authorize again»",
+  "codex.retry_drive_same_folder": "Uploads into the same folder as last time",
+  "codex.retry_drive_new_folder": "Another account: a new folder is made in that Drive",
+  "codex.retry_reauth_waiting": "Finish authorizing {email} in the window that opened — this box picks up the new access by itself.",
+  "codex.retry_reauth_open": "Open the Google page",
+  "codex.retry_reauth_done": "Authorized again: {email} — press Retry.",
+  "codex.retry_reauth_gave_up": "No new access arrived — the window was closed or Google refused. Try again or pick another account."
 }

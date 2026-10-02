@@ -331,5 +331,16 @@
   "codex.action_more": "更多",
   "codex.action_accept_plan": "核准 → 算圖",
   "codex.section_details": "詳細",
-  "codex.details_hint": "目標 · 核准 · AI 計畫 · 編號"
+  "codex.details_hint": "目標 · 核准 · AI 計畫 · 編號",
+  "codex.retry_drive_hint": "以標題命名的資料夾，含試算表、影片、圖片和配音。只上傳缺少的檔案。",
+  "codex.retry_reauth": "重新授權",
+  "codex.retry_drive_failed": "上次儲存到 Google 雲端硬碟失敗：",
+  "codex.retry_drive_auth_failed": "上次 Google 雲端硬碟拒絕存取——請重新授權該帳號或換一個帳號：",
+  "codex.retry_drive_reauth_needed": "此帳號需要重新授權——請按「重新授權」",
+  "codex.retry_drive_same_folder": "上傳到上次的同一個資料夾",
+  "codex.retry_drive_new_folder": "換了帳號：在該雲端硬碟新建資料夾",
+  "codex.retry_reauth_waiting": "請在開啟的視窗中完成 {email} 的授權——此視窗會自動取得新權限。",
+  "codex.retry_reauth_open": "開啟 Google 頁面",
+  "codex.retry_reauth_done": "已重新授權：{email}——請按「重試」。",
+  "codex.retry_reauth_gave_up": "沒有收到新的授權——視窗已關閉或 Google 拒絕了。請重試或換一個帳號。"
 }

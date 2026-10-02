@@ -331,5 +331,16 @@
   "codex.action_more": "更多",
   "codex.action_accept_plan": "批准 → 渲染",
   "codex.section_details": "详情",
-  "codex.details_hint": "目标 · 批准 · AI 计划 · 编号"
+  "codex.details_hint": "目标 · 批准 · AI 计划 · 编号",
+  "codex.retry_drive_hint": "以标题命名的文件夹，含表格、视频、图片和配音。只上传缺少的文件。",
+  "codex.retry_reauth": "重新授权",
+  "codex.retry_drive_failed": "上次保存到 Google 云端硬盘失败：",
+  "codex.retry_drive_auth_failed": "上次 Google 云端硬盘拒绝访问——请重新授权该账号或换一个账号：",
+  "codex.retry_drive_reauth_needed": "该账号需要重新授权——请点「重新授权」",
+  "codex.retry_drive_same_folder": "上传到上次的同一个文件夹",
+  "codex.retry_drive_new_folder": "换了账号：在该云端硬盘新建文件夹",
+  "codex.retry_reauth_waiting": "请在打开的窗口中完成 {email} 的授权——本窗口会自动获取新权限。",
+  "codex.retry_reauth_open": "打开 Google 页面",
+  "codex.retry_reauth_done": "已重新授权：{email}——请点「重试」。",
+  "codex.retry_reauth_gave_up": "没有收到新的授权——窗口已关闭或 Google 拒绝了。请重试或换一个账号。"
 }

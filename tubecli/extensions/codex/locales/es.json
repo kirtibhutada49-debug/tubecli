@@ -331,5 +331,16 @@
   "codex.action_more": "Más",
   "codex.action_accept_plan": "Aprobar → renderizar",
   "codex.section_details": "Detalles",
-  "codex.details_hint": "objetivo · aprobación · plan de IA · ids"
+  "codex.details_hint": "objetivo · aprobación · plan de IA · ids",
+  "codex.retry_drive_hint": "Una carpeta con el título, con la hoja, el vídeo, las imágenes y la voz. Solo se suben los archivos que faltan.",
+  "codex.retry_reauth": "Autorizar de nuevo",
+  "codex.retry_drive_failed": "La última vez falló el guardado en Google Drive:",
+  "codex.retry_drive_auth_failed": "La última vez Google Drive denegó el acceso — autoriza de nuevo la cuenta o elige otra:",
+  "codex.retry_drive_reauth_needed": "Hay que autorizar de nuevo esta cuenta — pulsa «Autorizar de nuevo»",
+  "codex.retry_drive_same_folder": "Se sube a la misma carpeta que la última vez",
+  "codex.retry_drive_new_folder": "Otra cuenta: se crea una carpeta nueva en ese Drive",
+  "codex.retry_reauth_waiting": "Termina de autorizar {email} en la ventana que se abrió — este cuadro recoge el nuevo acceso solo.",
+  "codex.retry_reauth_open": "Abrir la página de Google",
+  "codex.retry_reauth_done": "Autorizada de nuevo: {email} — pulsa Reintentar.",
+  "codex.retry_reauth_gave_up": "No llegó un acceso nuevo — se cerró la ventana o Google lo rechazó. Inténtalo otra vez o elige otra cuenta."
 }

@@ -1576,9 +1576,11 @@ const CODEX = (() => {
     $('cx-modal-retry').classList.remove('hidden');
     let info, models;
     try {
+      state.googleTokens = null;          // có thể vừa cấp quyền ở trang Auth
       const res = await Promise.all([
         request('/api/v1/content-video/tasks/' + encodeURIComponent(id) + '/retry'),
         request('/api/v1/content-video/models'),
+        loadGoogleTokens(),
       ]);
       info = res[0] || {};
       models = res[1] || {};
@@ -1620,9 +1622,164 @@ const CODEX = (() => {
     $('cx-rt-redraw').checked = false;
     $('cx-rt-image-wrap').classList.toggle('hidden', !!info.plan_only);
     $('cx-rt-voice-wrap').classList.toggle('hidden', !!info.plan_only);
+    const dr = info.drive || {};
+    $('cx-rt-drive').checked = !!dr.on || !!dr.error;     // lỗi Drive lần trước ⇒ chạy lại là để lưu cho xong
+    $('cx-rt-drive-share').value = dr.public === false ? 'private' : 'public';
+    state.retryBox.driveToken = String(dr.token_id || '');
+    $('cx-rt-drive-token').innerHTML = '';             // lựa chọn của task mở trước không được thắng
+    renderRetryDriveAlert();
+    renderRetryDrive();
     $('cx-rt-form').classList.remove('hidden');
     $('cx-rt-go').disabled = false;
     if (!info.plan_only) await loadRetryVoices();
+  }
+
+  // ── Google Drive trong hộp Chạy lại (2/10/2026) ──────────────────────────────────────────────────────────────────
+  // User: «retry thiếu chọn drive, khi lỗi auth không có chỗ để auth để cấp quyền lại» + «chỗ tạo task có chọn auth
+  // cấp quyền drive đó». Cùng luật chọn sẵn với form tạo task (tài khoản đã cấp cho agent thắng); lỗi lần trước là
+  // lỗi QUYỀN thì nói rõ và cho cấp quyền lại ngay tại đây — Auth Manager sinh token MỚI, hộp tự chọn nó.
+  const REAUTH_POLL_MS = 3000;
+  const REAUTH_MAX_MS = 180000;
+
+  function renderRetryDriveAlert(extraHtml) {
+    const rb = state.retryBox;
+    const box = $('cx-rt-drive-alert');
+    const dr = (rb && rb.info && rb.info.drive) || {};
+    if (!dr.error && !extraHtml) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    const head = dr.auth_error ? t('codex.retry_drive_auth_failed') : t('codex.retry_drive_failed');
+    box.innerHTML = (dr.error ? `<strong>${esc(head)}</strong><span>${esc(dr.error)}</span>` : '') + (extraHtml || '');
+    box.classList.toggle('cx-rt-drive-alert-auth', !!dr.auth_error);
+    box.classList.remove('hidden');
+  }
+
+  function retryDriveTokens() {
+    return (state.googleTokens || []).filter(x => x.status !== 'revoked' && (x.scopes || []).join(' ').includes('drive'));
+  }
+
+  function renderRetryDrive() {
+    const rb = state.retryBox;
+    if (!rb || !rb.info) return;
+    const dr = rb.info.drive || {};
+    const on = !!$('cx-rt-drive').checked;
+    $('cx-rt-drive-wrap').classList.toggle('hidden', !on);
+    const sel = $('cx-rt-drive-token');
+    const hint = $('cx-rt-drive-hint');
+    const tokens = state.googleTokens;
+    const list = retryDriveTokens();
+    const creds = dr.granted || [];
+    const usable = id => !!id && list.some(x => x.token_id === id && driveCanWrite(x.scopes));
+    const pick = usable(sel.value) ? sel.value
+      : (usable(rb.driveToken) ? rb.driveToken : pickDriveToken(list, creds, '', lsGet(CV_DRIVE_TOKEN_KEY)));
+    hint.classList.remove('warn');
+    $('cx-rt-reauth').disabled = !pick;
+    if (!pick) {
+      sel.innerHTML = '<option value="">—</option>';
+      sel.disabled = true;
+      hint.textContent = tokens === false
+        ? t('codex.cv_drive_load_failed', { msg: state.googleTokensError || '' }) : t('codex.cv_drive_none');
+      hint.classList.add('warn');
+      return;
+    }
+    const label = x => (x.authorized_email || x.credential_name || x.token_id)
+      + (x.authorized_email && x.credential_name ? ' · ' + x.credential_name : '');
+    const opt = x => {
+      const ro = !driveCanWrite(x.scopes);
+      return `<option value="${esc(x.token_id)}"${ro ? ' disabled' : ''}>${esc(label(x))}`
+        + `${ro ? ' — ' + esc(t('codex.cv_drive_readonly')) : ''}</option>`;
+    };
+    const mine = list.filter(x => creds.includes(x.credential_id));
+    const others = list.filter(x => !creds.includes(x.credential_id));
+    sel.innerHTML = mine.length
+      ? `<optgroup label="${esc(t('codex.cv_drive_group_granted', { agent: dr.agent || '?' }))}">${mine.map(opt).join('')}</optgroup>`
+        + (others.length ? `<optgroup label="${esc(t('codex.cv_drive_group_other'))}">${others.map(opt).join('')}</optgroup>` : '')
+      : others.map(opt).join('');
+    sel.disabled = false;
+    sel.value = pick;
+    renderRetryDriveHint();
+  }
+
+  function renderRetryDriveHint() {
+    const rb = state.retryBox;
+    const dr = (rb && rb.info && rb.info.drive) || {};
+    const hint = $('cx-rt-drive-hint');
+    const id = $('cx-rt-drive-token').value;
+    const tok = retryDriveTokens().find(x => x.token_id === id);
+    hint.classList.remove('warn');
+    if (!tok) { hint.textContent = ''; return; }
+    // Tài khoản lần trước hỏng vì quyền (và chưa cấp lại) → nhắc bấm «Cấp quyền lại».
+    const stale = dr.auth_error && id === String(dr.token_id || '') && !rb.reauthed;
+    const parts = [];
+    if (stale) parts.push(t('codex.retry_drive_reauth_needed'));
+    else if (tok.status === 'expired' && !tok.has_refresh) parts.push(t('codex.retry_drive_reauth_needed'));
+    if (dr.folder_url && dr.email && (tok.authorized_email || '') === dr.email) parts.push(t('codex.retry_drive_same_folder'));
+    else if (dr.folder_url) parts.push(t('codex.retry_drive_new_folder'));
+    hint.textContent = parts.join(' · ');
+    if (parts.length && (stale || (tok.status === 'expired' && !tok.has_refresh))) hint.classList.add('warn');
+  }
+
+  function onRetryDrive() { renderRetryDrive(); }
+  function onRetryDriveToken() { renderRetryDriveHint(); }
+
+  /** Cấp quyền lại tài khoản đang chọn: cùng luồng OAuth của trang Auth Manager, phạm vi = phạm vi đã lưu của
+   *  credential + Drive + Sheets. Cửa sổ mở NGAY trong lượt bấm (mở sau await là bị trình duyệt chặn). */
+  async function retryReauth() {
+    const rb = state.retryBox;
+    if (!rb) return;
+    const tok = retryDriveTokens().find(x => x.token_id === $('cx-rt-drive-token').value);
+    if (!tok) return;
+    const win = window.open('about:blank', '_blank');
+    const btn = $('cx-rt-reauth');
+    btn.disabled = true;
+    let url = '';
+    const before = new Set((state.googleTokens || []).map(x => x.token_id));
+    try {
+      let scopes = ['drive', 'sheets'];
+      try {
+        const cr = await request('/api/v1/auth-manager/credentials?provider=google');
+        const cred = ((cr && cr.credentials) || []).find(c => c.id === tok.credential_id);
+        scopes = Array.from(new Set(((cred && cred.scopes) || []).concat(scopes)));
+      } catch (e) { /* không đọc được phạm vi đã lưu: Drive + Sheets là đủ cho bước lưu */ }
+      const res = await request('/api/v1/auth-manager/credentials/' + encodeURIComponent(tok.credential_id) + '/authorize', {
+        method: 'POST', body: JSON.stringify({ scopes, browser_profile: '' }),
+      });
+      url = String((res && res.auth_url) || '');
+      if (!url.startsWith('https://')) throw new Error((res && (res.message || res.detail)) || 'no authorization URL');
+    } catch (e) {
+      if (win) win.close();
+      btn.disabled = false;
+      toast(t('codex.toast_action_failed', { error: e.message }), 'error');
+      return;
+    }
+    if (win) win.location.href = url;
+    // Bị chặn cửa sổ bật lên (khung nhúng không cho phép): đưa đường dẫn để bấm tay.
+    renderRetryDriveAlert(`<span class="cx-rt-reauth-wait">${esc(t('codex.retry_reauth_waiting', { email: tok.authorized_email || '' }))}`
+      + (win ? '' : ` <a href="${esc(url)}" target="_blank" rel="noopener">${esc(t('codex.retry_reauth_open'))}</a>`) + '</span>');
+    const started = Date.now();
+    let closedAt = 0;
+    while (state.retryBox === rb && Date.now() - started < REAUTH_MAX_MS) {
+      await new Promise(r => setTimeout(r, REAUTH_POLL_MS));
+      await loadGoogleTokens();
+      const fresh = (state.googleTokens || []).filter(x => !before.has(x.token_id) && x.credential_id === tok.credential_id
+        && driveCanWrite(x.scopes));
+      if (fresh.length) {
+        fresh.sort((a, b) => String(b.authorized_at || '').localeCompare(String(a.authorized_at || '')));
+        rb.driveToken = fresh[0].token_id;
+        rb.reauthed = true;
+        $('cx-rt-drive-token').value = '';
+        renderRetryDrive();
+        renderRetryDriveAlert(`<span class="cx-rt-reauth-ok">${esc(t('codex.retry_reauth_done', { email: fresh[0].authorized_email || '' }))}</span>`);
+        btn.disabled = false;
+        return;
+      }
+      if (win && win.closed) {
+        if (!closedAt) closedAt = Date.now();
+        else if (Date.now() - closedAt > 8000) break;      // đóng cửa sổ mà không cấp quyền
+      }
+    }
+    if (state.retryBox === rb) {
+      renderRetryDriveAlert(`<span class="cx-rt-reauth-wait">${esc(t('codex.retry_reauth_gave_up'))}</span>`);
+      btn.disabled = false;
+    }
   }
 
   /** Giọng đọc được ngôn ngữ của task (Edge mặc định đứng đầu), gom theo engine như hộp Clone. */
@@ -1667,6 +1824,18 @@ const CODEX = (() => {
       redraw_images: !rb.info.plan_only && $('cx-rt-redraw').checked,
       tts_engine: v.engine || '', tts_voice: v.id || '', capcut_email: v.email || '',
     };
+    if (rb.info.drive) {
+      body.drive = !!$('cx-rt-drive').checked;
+      if (body.drive) {
+        body.drive_token_id = $('cx-rt-drive-token').value || '';
+        body.drive_public = $('cx-rt-drive-share').value !== 'private';
+        if (!body.drive_token_id) {
+          toast(t('codex.toast_video_drive_account_required'), 'error');
+          return;
+        }
+        lsSet(CV_DRIVE_TOKEN_KEY, body.drive_token_id);
+      }
+    }
     $('cx-rt-go').disabled = true;
     try {
       await request('/api/v1/content-video/tasks/' + encodeURIComponent(rb.id) + '/retry', {
@@ -2639,6 +2808,7 @@ const CODEX = (() => {
     init, refresh, toggle, collapse, togglePlan, setFilter, setKind, setAgent, setLanguage, setSort, onSearch, loadMore, showTask,
     setAuto, setAutoApprove,
     approve, reject, cancel, retry, runNow, accept, requestChanges,
+    onRetryDrive, onRetryDriveToken, retryReauth,
     confirmNote, confirmDelete, doDelete, copyResult, planTask,
     openNewTask, submitNewTask, queueVideo, setNewKind, onVideoPreset, onVideoAgent, onVideoContent, onVideoLength, onVideoScript, onVideoKeepTheme, onVideoInstructions, planFromModal, closeModal, onBackdrop,
     onVideoDrive, onVideoDriveToken, onVideoDriveShare, laneChoice, onVideoSplit, openDriveSync, startDriveSync, syncThenDelete, resumeLane,
