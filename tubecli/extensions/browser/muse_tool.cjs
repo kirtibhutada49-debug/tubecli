@@ -38,8 +38,9 @@ const IMAGE_GRACE_MS = 60000;
 // Ảnh nhỏ hơn cạnh này là avatar / biểu tượng, không phải ảnh Muse vẽ.
 const MIN_IMAGE_EDGE = 256;
 // Xin video mà ô trả lời đã đứng yên chừng này vẫn chưa có video → coi như Muse không làm. Đo 2/10/2026: ô trả lời
-// chỉ xuất hiện KHI video đã xong (~90 s), rồi thẻ <video> sẵn sàng sau ~2 s nữa.
-const VIDEO_GRACE_MS = 90000;
+// thường xuất hiện KHI video đã xong (~90 s), nhưng có lượt Muse bày một ô trợ lý RỖNG (nút dừng đã tắt) rồi mới gắn
+// video sau hơn 90 s nữa — 90 s ân hạn trả «empty reply» trong khi video vẫn về. Nên 4 phút.
+const VIDEO_GRACE_MS = 240000;
 
 function arg(name, def) {
   const i = process.argv.indexOf('--' + name);
