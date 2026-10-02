@@ -571,7 +571,9 @@ def video_request(prompt: str, aspect_ratio: str = "9:16", continue_from: bool =
     if continue_from:
         lines.append("The FIRST attached image is the final frame of the previous shot: the video must START from "
                      "exactly that frame (same person, pose, framing, lighting and background) and continue the "
-                     "action seamlessly. Keep the person's face, hair and outfit identical.")
+                     "action seamlessly. The other attached image(s) are the character's reference portrait: the "
+                     "person must stay the SAME individual as in that portrait — same face shape, eyes, hair color "
+                     "and style, skin tone — throughout the whole video. Keep the outfit identical.")
     else:
         lines.append("Use the attached image(s) as the reference for the person, outfit and setting — keep the face, "
                      "hair and outfit identical.")
