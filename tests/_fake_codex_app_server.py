@@ -23,6 +23,9 @@ _out = threading.Lock()
 _pending = {}            # id câu hỏi gửi client → Event + kết quả
 _nid = [1000]
 _n = [0]
+# Codex thật nói UTF-8 qua stdio; Python trên Windows mặc định đọc/ghi theo bảng mã máy (cp1252) → «—» hoá «â€”»
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 
 if "--version" in sys.argv:
     print("codex-cli 0.160.0")
