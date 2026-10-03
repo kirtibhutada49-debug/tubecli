@@ -221,6 +221,11 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "
 .cg-tab.on { color: var(--text); border-bottom-color: var(--primary); }
 .cg-code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 26px; font-weight: 800; letter-spacing: .12em; text-align: center;
   padding: 10px; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg); user-select: all; }
+.cg-devlink { display: flex; gap: 6px; align-items: stretch; }
+.cg-devlink-url { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.cg-devlink-open { align-self: flex-start; text-decoration: none; }
 
 .cg-menu-pop { position: fixed; z-index: 50; min-width: 170px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: var(--shadow); padding: 4px; display: flex; flex-direction: column; }

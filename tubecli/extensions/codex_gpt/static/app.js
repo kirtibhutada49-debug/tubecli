@@ -823,16 +823,37 @@
     };
   }
 
+  // Chép chữ: Clipboard API (iframe Flow có allow clipboard-write) → bị chặn thì execCommand → vẫn hụt thì bôi đen để bấm Ctrl+C
+  async function copyText(text, selectEl) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* bị chặn → thử cách cũ */ }
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove();
+    if (!ok && selectEl) { const r = document.createRange(); r.selectNodeContents(selectEl); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    return ok;
+  }
+  async function copyWithToast(text, selectEl) {
+    const ok = await copyText(text, selectEl);
+    toast(ok ? T('cg.copied', null, 'Copied') : T('cg.copy_manual', null, 'Couldn\'t copy — press Ctrl+C'), ok ? 2500 : 5000);
+  }
+
+  // Mã thiết bị: trình duyệt đang mở Flow thường KHÔNG phải trình duyệt đăng nhập ChatGPT → bước 1 là CHÉP link, mở tại đây chỉ là phụ
   function showDeviceCode(lg) {
     const p = openPanel(head(T('cg.sign_in', null, 'Sign in to ChatGPT')) + '<div class="cg-panel-body">'
-      + '<p>' + esc(T('cg.step1', null, '1. Open this link (any device):')) + '</p>'
-      + '<a class="cg-btn" href="' + esc(lg.url) + '" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">' + esc(lg.url) + ' ↗</a>'
+      + '<p>' + esc(T('cg.step1', null, '1. Copy this link and open it in the browser where you\'re signed in to ChatGPT:')) + '</p>'
+      + '<div class="cg-devlink"><span class="cg-devlink-url" id="dUrl" title="' + esc(lg.url) + '">' + esc(lg.url) + '</span>'
+      + '<button type="button" class="cg-btn cg-btn-pri" id="dCopyUrl">' + esc(T('cg.copy_link', null, 'Copy link')) + '</button></div>'
+      + '<a class="cg-link cg-devlink-open" href="' + esc(lg.url) + '" target="_blank" rel="noopener">' + esc(T('cg.open_here', null, 'Open in this browser')) + ' ↗</a>'
       + '<p>' + esc(T('cg.step2', null, '2. Enter this code:')) + '</p>'
       + '<div class="cg-code" id="dCode">' + esc(lg.code) + '</div>'
       + '<button type="button" class="cg-btn" id="dCopy">' + esc(T('cg.copy_code', null, 'Copy code')) + '</button>'
       + '<div class="cg-thinking" id="dWait"><span class="cg-spin"></span>' + esc(T('cg.waiting_login', null, 'Waiting for you to approve… (code valid 15 minutes)')) + '</div>'
       + '<button type="button" class="cg-link" id="dCancel">' + esc(T('cg.cancel', null, 'Cancel')) + '</button></div>', true);
-    $('dCopy').onclick = () => { try { navigator.clipboard.writeText(lg.code); toast(T('cg.copied', null, 'Copied')); } catch (e) { /* chặn clipboard */ } };
+    $('dCopyUrl').onclick = () => copyWithToast(lg.url, $('dUrl'));
+    $('dCopy').onclick = () => copyWithToast(lg.code, $('dCode'));
     $('dCancel').onclick = async () => { try { await api('/accounts/login/' + lg.id + '/cancel', { method: 'POST' }); } catch (e) { /* đã xong */ } closePanel(); };
     S.loginStop = false;
     const poll = async () => {
