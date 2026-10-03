@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codex GPT</title>
+<script>
+  /* Sơn đúng nền ngay từ đầu: ?theme=glass|light → sáng, dark → tối; mở thẳng (không nhúng) thì theo hệ thống. */
+  (function () {
+    var q = new URLSearchParams(location.search), th = q.get('theme') || '';
+    var r = document.documentElement;
+    if (th === 'glass' || th === 'light') r.setAttribute('data-theme', 'light');
+    else if (th === 'dark') r.setAttribute('data-theme', 'dark');
+    if (q.get('embed') === '1') r.setAttribute('data-embed', '1');
+  })();
+</script>
+<link rel="stylesheet" href="/codex-gpt-static/app.css?v=__ASSET_VER__">
+</head>
+<body>
+<div class="cg" id="app">
+  <header class="cg-top">
+    <button type="button" class="cg-icon-btn cg-menu" id="btnMenu" data-i18n-aria-label="cg.sessions" aria-label="Sessions">☰</button>
+    <div class="cg-brand"><span class="cg-logo" aria-hidden="true">◆</span><span>Codex GPT</span></div>
+    <div class="cg-top-spacer"></div>
+    <button type="button" class="cg-acct-pill" id="btnAccount" hidden></button>
+    <button type="button" class="cg-icon-btn" id="btnSettings" data-i18n-title="cg.settings" title="Settings" aria-label="Settings">⚙</button>
+  </header>
+
+  <div class="cg-body">
+    <aside class="cg-side" id="side">
+      <button type="button" class="cg-btn cg-btn-pri cg-new" id="btnNew" data-i18n="cg.new_chat">New chat</button>
+      <input type="search" class="cg-input cg-search" id="search" data-i18n-placeholder="cg.search" placeholder="Search chats…">
+      <div class="cg-list" id="list" role="list"></div>
+      <div class="cg-side-foot">
+        <button type="button" class="cg-link" id="btnArchived" data-i18n="cg.show_archived">Archived chats</button>
+      </div>
+    </aside>
+    <div class="cg-scrim" id="sideScrim" hidden></div>
+
+    <main class="cg-main" id="main">
+      <!-- màn chào / cài đặt / thêm tài khoản -->
+      <section class="cg-onboard" id="onboard" hidden></section>
+
+      <!-- một phiên -->
+      <section class="cg-chat" id="chat" hidden>
+        <div class="cg-chat-head">
+          <div class="cg-title-wrap">
+            <h1 class="cg-title" id="title" tabindex="0" data-i18n-title="cg.rename_hint" title="Click to rename"></h1>
+            <div class="cg-sub" id="sub"></div>
+          </div>
+          <div class="cg-head-acts">
+            <span class="cg-usage" id="usage"></span>
+            <button type="button" class="cg-icon-btn" id="btnThreadMenu" aria-haspopup="menu" data-i18n-aria-label="cg.more" aria-label="More">⋯</button>
+          </div>
+        </div>
+        <div class="cg-msgs" id="msgs" aria-live="polite"></div>
+        <div class="cg-notice" id="notice" hidden></div>
+        <form class="cg-composer" id="composer">
+          <textarea class="cg-textarea" id="input" rows="1" data-i18n-placeholder="cg.input_ph" placeholder="Ask Codex to do something… (Enter to send, Shift+Enter for a new line)"></textarea>
+          <div class="cg-composer-row">
+            <button type="button" class="cg-chip" id="chipCwd" data-i18n-title="cg.folder" title="Working folder"></button>
+            <select class="cg-chip cg-select" id="selModel" data-i18n-title="cg.model" title="Model"></select>
+            <select class="cg-chip cg-select" id="selEffort" data-i18n-title="cg.effort" title="Reasoning effort"></select>
+            <div class="cg-top-spacer"></div>
+            <button type="button" class="cg-btn cg-btn-danger" id="btnStop" hidden data-i18n="cg.stop">Stop</button>
+            <button type="submit" class="cg-btn cg-btn-pri" id="btnSend" data-i18n="cg.send">Send</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <!-- ngăn kéo / hộp thoại -->
+  <div class="cg-overlay" id="overlay" hidden></div>
+  <section class="cg-panel" id="panel" role="dialog" aria-modal="true" hidden></section>
+  <div class="cg-menu-pop" id="pop" role="menu" hidden></div>
+  <div class="cg-toast" id="toast" role="status" hidden></div>
+</div>
+<script src="/codex-gpt-static/app.js?v=__ASSET_VER__"></script>
+</body>
+</html>

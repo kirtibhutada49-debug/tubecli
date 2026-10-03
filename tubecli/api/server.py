@@ -453,7 +453,7 @@ async def _guest_allowed(request: Request, scope: dict) -> bool:
     ext_routes = [str(r) for r in (scope.get("extension_routes") or []) if r]
     if ext_routes:
         _SENSITIVE = ("/api/v1/file-manager", "/api/v1/auth-manager",
-                      "/api/v1/keychain", "/api/v1/terminal", "/api/v1/market",
+                      "/api/v1/keychain", "/api/v1/terminal", "/api/v1/codex-gpt", "/api/v1/market",
                       "/api/v1/extensions", "/api/v1/drive", "/api/v1/system",
                       "/api/v1/agents", "/api/v1/scripts", "/api/v1/cloud",
                       "/api/v1/ollama")
@@ -5961,6 +5961,11 @@ app.include_router(_terminal_router)
 # App installer: cài 9Router/Ollama... thành systemd service (node App trong Flow).
 from tubecli.api.app_routes import router as _app_router
 app.include_router(_app_router)
+
+# Codex GPT: Codex CLI chạy trên máy + nhiều gói đăng ký + phiên chat (node Codex GPT trong Flow, 3/10/2026).
+# Codex chạy lệnh trên máy = quyền như Terminal → /api/v1/codex-gpt nằm trong _SENSITIVE ở trên.
+from tubecli.extensions.codex_gpt.routes import router as _codex_gpt_router
+app.include_router(_codex_gpt_router)
 
 # AI tạo ảnh DÙNG CHUNG (Cloudflare/Gemini/9Router): cài đặt, danh sách model, vẽ thử, vẽ, phát file.
 # Content Studio, Thumbnail Studio… gọi vào đây thay vì mỗi extension một bộ vẽ (15/9/2026).
