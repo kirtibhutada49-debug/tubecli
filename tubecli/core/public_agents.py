@@ -352,7 +352,7 @@ def _hire_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
 # Thuê làm VIDEO QUẢNG CÁO TỪ ẢNH (Pod Studio «Video từ ảnh tham chiếu», user 3/10/2026): khách gửi ảnh sản phẩm
 # (+ ảnh người mẫu nếu chủ cho), yêu cầu + thoại; tính THEO CLIP 10 s. Mẫu = mẫu ở kho mẫu chung của lõi (phần ref_video).
 HIRE_POD_CLIPS_MAX = 12          # = MAX_CLIPS của pipe Pod + POD_CLIPS_MAX của cloud (lib/hire.js)
-HIRE_POD_TEMPLATES_MAX = 30      # = POD_TEMPLATES_MAX của cloud
+HIRE_POD_TEMPLATES_MAX = 60      # = POD_TEMPLATES_MAX của cloud (3/10 tối: 44 mẫu kiểu nghệ thuật + mẫu cũ không vừa 30)
 
 
 def _hire_pod_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
