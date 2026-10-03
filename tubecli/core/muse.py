@@ -587,12 +587,13 @@ def _to_jpeg(data: bytes) -> bytes:
 
 
 def generate_image_bytes(prompt: str, aspect_ratio: str = "16:9", reference_images: Optional[list] = None,
-                         timeout: int = IMAGE_TIMEOUT) -> bytes:
-    """Bytes JPEG của MỘT ảnh Muse vẽ. Ném MuseError (kind refused khi Muse trả lời bằng chữ)."""
+                         timeout: int = IMAGE_TIMEOUT, thread_id: str = "") -> bytes:
+    """Bytes JPEG của MỘT ảnh Muse vẽ. Ném MuseError (kind refused khi Muse trả lời bằng chữ).
+    thread_id="new": vẽ trong chat MỚI — thử lại sau một lần từ chối phải đi chat mới, chat cũ nhớ lời từ chối (#164)."""
     refs = [p for p in (reference_images or []) if p and os.path.isfile(str(p))][:3]
     with tempfile.TemporaryDirectory(prefix="muse_img_") as tmp:
         res = ask(image_request(prompt, aspect_ratio, bool(refs)), want_images=True, files=refs,
-                  image_dir=tmp, max_images=1, timeout=timeout)
+                  image_dir=tmp, max_images=1, timeout=timeout, thread_id=thread_id)
         imgs = [i for i in (res.get("images") or []) if isinstance(i, dict) and i.get("path")]
         if not imgs:
             said = " ".join(str(res.get("text") or "").split())[:240]
