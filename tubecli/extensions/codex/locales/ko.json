@@ -347,6 +347,9 @@
   "codex.ext_images_count": "{n}개 이미지 선택됨",
   "codex.ext_uploading": "이미지 업로드 중… {n}/{total}",
   "codex.ext_select_pick": "— 선택 —",
+  "codex.ext_tpl_save": "템플릿으로 저장",
+  "codex.ext_tpl_name": "템플릿 이름 (Content Studio와 공유)",
+  "codex.ext_tpl_saved": "템플릿 «{name}» 저장됨 — Content Studio에서도 사용할 수 있습니다",
   "codex.toast_ext_required": "입력 필요: {field}",
   "codex.created_ext_title": "작업 #{seq} 대기열 추가됨",
   "codex.created_ext_desc": "파이프라인은 이 서버에서 실행됩니다. 보드에서 단계를 확인하세요."

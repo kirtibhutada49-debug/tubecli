@@ -5972,6 +5972,10 @@ app.include_router(_image_router)
 from tubecli.api.muse_routes import router as _muse_router
 app.include_router(_muse_router)
 
+# Kho MẪU chung của mọi studio (3/10/2026): Content Studio và Pod Studio cùng đọc/ghi một mẫu.
+from tubecli.api.templates_routes import router as _templates_router
+app.include_router(_templates_router)
+
 # Gọi THỬ model chat (nút «Thử gọi» của bảng chọn AI trên Flow, 26/9/2026): đi đúng đường agent đi.
 from tubecli.api.ai_routes import router as _ai_router
 app.include_router(_ai_router)

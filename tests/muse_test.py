@@ -35,6 +35,7 @@ import tubecli.config as CFG  # noqa: E402
 TMP = Path(tempfile.mkdtemp(prefix="muse_test_"))
 CFG.GLOBAL_SETTINGS_FILE = TMP / "global_settings.json"
 from tubecli.core import muse as M  # noqa: E402
+_REAL_RUN_TOOL = M.run_tool        # các phần sau thay bằng bản giả; phần K cần bản thật
 
 PROFILES = TMP / "profiles"
 (PROFILES / "chayagent").mkdir(parents=True)
@@ -474,6 +475,39 @@ except FileNotFoundError:
     ok(True, "muse_tool.cjs: không có node để kiểm (bỏ qua)")
 js = tool.read_text(encoding="utf-8")
 ok("browser.close()" not in js.replace("TUYỆT ĐỐI không browser.close()", ""), "driver không bao giờ đóng trình duyệt của người dùng")
+
+print("K. run_tool không bao giờ chờ vô hạn (Pod Studio #160: treo 7,5 giờ dù hạn 645 s)")
+import time as _time  # noqa: E402
+_real_tool = M._tool_path
+_kd = Path(tempfile.mkdtemp(prefix="muse_rt_"))
+(_kd / "ok.cjs").write_text('console.log("noise"); console.log(\'__MUSE_RESULT__{"ok":true,"text":"xin chào"}__MUSE_END__\');', encoding="utf-8")
+# tiến trình CHÁU kế thừa stdout rồi ngủ 60 s, cha cũng ngủ — đúng hình «có ai giữ đầu ống»
+(_kd / "hang.cjs").write_text(
+    "const {spawn}=require('child_process');"
+    "const c=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'inherit'});"
+    "require('fs').writeFileSync(" + json.dumps(str(_kd / "child.pid")) + ",String(c.pid));"
+    "setTimeout(()=>{},60000);", encoding="utf-8")
+M.run_tool = _REAL_RUN_TOOL
+try:
+    M._tool_path = lambda: str(_kd / "ok.cjs")
+    r = M.run_tool(1, "status", timeout=5)
+    ok(r.get("ok") and r.get("text") == "xin chào", "đầu ra qua file tạm vẫn đọc đúng (UTF-8)", r)
+    M._tool_path = lambda: str(_kd / "hang.cjs")
+    t0 = _time.time()
+    r = M.run_tool(1, "ask", {"prompt": "x"}, timeout=-42)          # chờ = timeout + 45 = 3 s
+    took = _time.time() - t0
+    ok(r.get("kind") == "timeout" and took < 20, f"driver treo + cháu giữ stdout → timeout sau {took:.1f} s", r)
+    import psutil  # noqa: E402
+    _cpid = int((_kd / "child.pid").read_text() or 0)
+    _time.sleep(0.5)
+    ok(not psutil.pid_exists(_cpid) or psutil.Process(_cpid).status() == psutil.STATUS_ZOMBIE, "tiến trình cháu bị giết theo cây", _cpid)
+    left = [n for n in os.listdir(tempfile.gettempdir()) if n.startswith(("muse_out_", "muse_err_"))
+            and os.path.getmtime(os.path.join(tempfile.gettempdir(), n)) > t0 - 1]
+    ok(not left, "file tạm đầu ra được dọn", left)
+except FileNotFoundError:
+    ok(True, "run_tool: không có node để kiểm (bỏ qua)")
+finally:
+    M._tool_path = _real_tool
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

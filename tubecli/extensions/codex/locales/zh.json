@@ -347,6 +347,9 @@
   "codex.ext_images_count": "已选择 {n} 张图片",
   "codex.ext_uploading": "正在上传图片… {n}/{total}",
   "codex.ext_select_pick": "— 请选择 —",
+  "codex.ext_tpl_save": "保存为模板",
+  "codex.ext_tpl_name": "模板名称（与 Content Studio 共用）",
+  "codex.ext_tpl_saved": "模板「{name}」已保存 — Content Studio 也能使用",
   "codex.toast_ext_required": "请填写：{field}",
   "codex.created_ext_title": "任务 #{seq} 已排队",
   "codex.created_ext_desc": "流水线在本服务器上运行，可在看板上跟踪每一步。"

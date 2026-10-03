@@ -347,6 +347,9 @@
   "codex.ext_images_count": "{n} image(s) selected",
   "codex.ext_uploading": "Uploading images… {n}/{total}",
   "codex.ext_select_pick": "— pick —",
+  "codex.ext_tpl_save": "Save as template",
+  "codex.ext_tpl_name": "Template name (shared with Content Studio)",
+  "codex.ext_tpl_saved": "Template «{name}» saved — Content Studio can use it too",
   "codex.toast_ext_required": "Please fill in: {field}",
   "codex.created_ext_title": "Task #{seq} queued",
   "codex.created_ext_desc": "The pipeline runs on this server; follow its steps on the board."

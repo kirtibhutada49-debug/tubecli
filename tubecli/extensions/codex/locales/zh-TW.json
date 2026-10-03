@@ -347,6 +347,9 @@
   "codex.ext_images_count": "已選擇 {n} 張圖片",
   "codex.ext_uploading": "正在上傳圖片… {n}/{total}",
   "codex.ext_select_pick": "— 請選擇 —",
+  "codex.ext_tpl_save": "儲存為範本",
+  "codex.ext_tpl_name": "範本名稱（與 Content Studio 共用）",
+  "codex.ext_tpl_saved": "範本「{name}」已儲存 — Content Studio 也能使用",
   "codex.toast_ext_required": "請填寫：{field}",
   "codex.created_ext_title": "任務 #{seq} 已排隊",
   "codex.created_ext_desc": "流水線在本伺服器上執行，可在看板上追蹤每一步。"

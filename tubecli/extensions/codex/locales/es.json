@@ -347,6 +347,9 @@
   "codex.ext_images_count": "{n} imagen(es) seleccionada(s)",
   "codex.ext_uploading": "Subiendo imágenes… {n}/{total}",
   "codex.ext_select_pick": "— elegir —",
+  "codex.ext_tpl_save": "Guardar como plantilla",
+  "codex.ext_tpl_name": "Nombre de la plantilla (compartida con Content Studio)",
+  "codex.ext_tpl_saved": "Plantilla «{name}» guardada — Content Studio también puede usarla",
   "codex.toast_ext_required": "Falta: {field}",
   "codex.created_ext_title": "Tarea #{seq} en cola",
   "codex.created_ext_desc": "La canalización se ejecuta en este servidor; sigue sus pasos en el tablero."

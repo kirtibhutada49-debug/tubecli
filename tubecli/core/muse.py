@@ -303,20 +303,57 @@ def run_tool(port: int, action: str, req: Optional[dict] = None, timeout: int = 
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(req, f, ensure_ascii=False)
         args += ["--in", tmp]
+    # Đầu ra vào FILE tạm, không qua ống: subprocess.run(capture_output, timeout) trên Windows, khi quá hạn, giết node
+    # rồi communicate() KHÔNG hạn để gom ống — có tiến trình nào giữ đầu ống là chờ mãi (Pod Studio #160 đêm 2/10/2026:
+    # clip 3 treo 7,5 giờ dù hạn 645 s). File thì không có gì để chờ; quá hạn → giết cả cây tiến trình.
+    out_fd, out_path = tempfile.mkstemp(prefix="muse_out_", suffix=".txt")
+    err_fd, err_path = tempfile.mkstemp(prefix="muse_err_", suffix=".txt")
+    p = None
     try:
-        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout + 45, **_proc.hidden_kwargs())
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "kind": "timeout", "error": f"Muse did not answer within {timeout} s."}
-    except FileNotFoundError:
-        return {"ok": False, "kind": "browser", "error": "Node.js is not installed — the Muse driver needs it."}
-    finally:
-        if tmp:
+        with os.fdopen(out_fd, "wb") as out_f, os.fdopen(err_fd, "wb") as err_f:
             try:
-                os.remove(tmp)
-            except OSError:
+                p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=out_f, stderr=err_f, **_proc.hidden_kwargs())
+            except FileNotFoundError:
+                return {"ok": False, "kind": "browser", "error": "Node.js is not installed — the Muse driver needs it."}
+            try:
+                p.wait(timeout=timeout + 45)
+            except subprocess.TimeoutExpired:
+                _kill_tree(p)
+                return {"ok": False, "kind": "timeout", "error": f"Muse did not answer within {timeout} s."}
+        return parse_tool_output(_read_text(out_path), _read_text(err_path))
+    finally:
+        for f in (tmp, out_path, err_path):
+            if f:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+
+
+def _read_text(path: str) -> str:
+    try:
+        with open(path, "rb") as f:
+            return f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _kill_tree(p: "subprocess.Popen") -> None:
+    """Giết tiến trình driver và mọi tiến trình con của nó, chờ tối đa 10 s — không bao giờ treo ở đây."""
+    try:
+        import psutil
+        for c in psutil.Process(p.pid).children(recursive=True):
+            try:
+                c.kill()
+            except Exception:      # noqa: BLE001
                 pass
-    return parse_tool_output(r.stdout or "", r.stderr or "")
+    except Exception:      # noqa: BLE001
+        pass
+    try:
+        p.kill()
+        p.wait(timeout=10)
+    except Exception:      # noqa: BLE001
+        pass
 
 
 def parse_tool_output(stdout: str, stderr: str = "") -> dict:

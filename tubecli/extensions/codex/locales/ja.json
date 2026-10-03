@@ -347,6 +347,9 @@
   "codex.ext_images_count": "{n} 枚選択済み",
   "codex.ext_uploading": "画像をアップロード中… {n}/{total}",
   "codex.ext_select_pick": "— 選択 —",
+  "codex.ext_tpl_save": "テンプレートとして保存",
+  "codex.ext_tpl_name": "テンプレート名（Content Studio と共有）",
+  "codex.ext_tpl_saved": "テンプレート「{name}」を保存しました — Content Studio でも使えます",
   "codex.toast_ext_required": "未入力: {field}",
   "codex.created_ext_title": "タスク #{seq} をキューに追加",
   "codex.created_ext_desc": "パイプラインはこのサーバーで実行されます。ボードで各ステップを確認できます。"

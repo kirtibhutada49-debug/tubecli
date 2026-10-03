@@ -67,6 +67,7 @@ const CODEX = (() => {
     extKinds: [],         // loại việc do extension khai (GET /task-kinds) — Pod Studio «Video từ ảnh tham chiếu»…
     extKind: null,        // mô tả loại đang chọn trong cửa sổ «Nhiệm vụ mới» (null = general/video)
     extFiles: {},         // {key: File[]} ảnh đã chọn cho trường kiểu images
+    extOpts: {},          // {key: option[]} lựa chọn tải từ options_url — option có `fills` (mẫu) thì chọn là điền ô khác
     agent: '',            // assignee_id
     language: '',         // meta.language
     sort: 'newest',
@@ -2149,6 +2150,7 @@ const CODEX = (() => {
   async function renderExtForm(ext) {
     const box = $('cx-new-ext');
     state.extFiles = {};
+    state.extOpts = {};
     const fields = ext.fields || [];
     box.innerHTML = fields.map(f => {
       const id = extFieldId(f.key);
@@ -2182,28 +2184,78 @@ const CODEX = (() => {
       }
       return `<div class="cx-field"><label for="${id}">${esc(f.label || f.key)}${req}</label>
         <input type="text" id="${id}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}" oninput="CODEX.onExtField('${esc(f.key)}', this)">${hint}</div>`;
-    }).join('');
-    // select có options_url: hỏi máy chủ rồi điền; giá trị đã nhớ được chọn lại nếu còn.
-    for (const f of fields.filter(x => x.type === 'select' && x.options_url)) {
-      const sel = $(extFieldId(f.key));
-      try {
-        const d = await request(f.options_url);
-        const opts = Array.isArray(d) ? d : (d && d.options) || [];
-        const saved = lsGet(EXT_LS(ext.id, f.key)) || (f.default != null ? String(f.default) : '');
-        sel.innerHTML = `<option value="">${esc(t('codex.ext_select_pick'))}</option>` + opts.map(o => {
-          const v = typeof o === 'object' ? o.value : o;
-          const l = typeof o === 'object' ? (o.label || o.value) : o;
-          return `<option value="${esc(String(v))}" ${String(v) === saved ? 'selected' : ''}>${esc(String(l))}</option>`;
-        }).join('');
-      } catch (e) {
-        sel.innerHTML = `<option value="">${esc(e.message)}</option>`;
-      }
+    }).join('') + (ext.template_save_url ? `
+      <div class="cx-x-tpl"><button type="button" class="cx-btn cx-btn-ghost cx-btn-sm" onclick="CODEX.saveExtTemplate()">
+        <span class="material-symbols-outlined" aria-hidden="true">bookmark_add</span>${esc(t('codex.ext_tpl_save'))}</button></div>` : '');
+    for (const f of fields.filter(x => x.type === 'select' && x.options_url)) await loadExtOptions(ext, f);
+  }
+
+  // select có options_url: hỏi máy chủ rồi điền; giá trị đã nhớ được chọn lại nếu còn (`pick` = chọn giá trị này).
+  async function loadExtOptions(ext, f, pick) {
+    const sel = $(extFieldId(f.key));
+    if (!sel) return;
+    try {
+      const d = await request(f.options_url);
+      const opts = Array.isArray(d) ? d : (d && d.options) || [];
+      state.extOpts[f.key] = opts;
+      const saved = pick != null ? String(pick) : (lsGet(EXT_LS(ext.id, f.key)) || (f.default != null ? String(f.default) : ''));
+      sel.innerHTML = `<option value="">${esc(t('codex.ext_select_pick'))}</option>` + opts.filter(o => (typeof o === 'object' ? o.value : o) !== '').map(o => {
+        const v = typeof o === 'object' ? o.value : o;
+        const l = typeof o === 'object' ? (o.label || o.value) : o;
+        return `<option value="${esc(String(v))}" ${String(v) === saved ? 'selected' : ''}>${esc(String(l))}</option>`;
+      }).join('');
+    } catch (e) {
+      sel.innerHTML = `<option value="">${esc(e.message)}</option>`;
     }
   }
 
   function onExtField(key, el) {
     if (!state.extKind) return;
     lsSet(EXT_LS(state.extKind.id, key), el.type === 'checkbox' ? (el.checked ? '1' : '0') : (el.value || ''));
+    // Chọn một MẪU (option có `fills`): điền các ô mẫu quản — kiểu hình, thể loại, số clip… (kho mẫu chung của lõi).
+    const opt = (state.extOpts[key] || []).find(o => o && typeof o === 'object' && String(o.value) === el.value);
+    if (opt && opt.fills && typeof opt.fills === 'object') applyExtFills(opt.fills);
+  }
+
+  function applyExtFills(fills) {
+    const kind = state.extKind;
+    for (const [k, v] of Object.entries(fills)) {
+      const el = $(extFieldId(k));
+      if (!el || el.type === 'file') continue;
+      if (el.type === 'checkbox') {
+        el.checked = v === true || v === 1 || v === '1' || v === 'true';
+        lsSet(EXT_LS(kind.id, k), el.checked ? '1' : '0');
+      } else {
+        el.value = v == null ? '' : String(v);
+        lsSet(EXT_LS(kind.id, k), el.value);
+      }
+    }
+  }
+
+  /** «Lưu thành mẫu»: các ô `template_keys` hiện tại → template_save_url; mẫu mới hiện ngay trong ô Mẫu. */
+  async function saveExtTemplate() {
+    const ext = state.extKind;
+    if (!ext || !ext.template_save_url) return;
+    const tplField = (ext.fields || []).find(f => f.key === ext.template_field);
+    const current = tplField ? ($(extFieldId(tplField.key)) || {}).value || '' : '';
+    const name = (window.prompt(t('codex.ext_tpl_name'), current) || '').trim();
+    if (!name) return;
+    const values = {};
+    for (const k of ext.template_keys || []) {
+      const el = $(extFieldId(k));
+      if (!el) continue;
+      values[k] = el.type === 'checkbox' ? !!el.checked : el.type === 'number' ? (el.value === '' ? null : Number(el.value)) : (el.value || '').trim();
+    }
+    try {
+      await request(ext.template_save_url, { method: 'POST', body: JSON.stringify({ name: name, values: values }) });
+      if (tplField && tplField.options_url) {
+        await loadExtOptions(ext, tplField, name);
+        lsSet(EXT_LS(ext.id, tplField.key), name);
+      }
+      toast(t('codex.ext_tpl_saved', { name: name }), 'success');
+    } catch (e) {
+      toast(t('codex.toast_action_failed', { error: e.message }), 'error');
+    }
   }
 
   function onExtFiles(key, input) {
@@ -2993,7 +3045,7 @@ const CODEX = (() => {
     approve, reject, cancel, retry, runNow, accept, requestChanges,
     onRetryDrive, onRetryDriveToken, retryReauth,
     confirmNote, confirmDelete, doDelete, copyResult, planTask,
-    openNewTask, submitNewTask, queueVideo, setNewKind, onExtFiles, onExtField, onVideoPreset, onVideoAgent, onVideoContent, onVideoLength, onVideoScript, onVideoKeepTheme, onVideoInstructions, planFromModal, closeModal, onBackdrop,
+    openNewTask, submitNewTask, queueVideo, setNewKind, onExtFiles, onExtField, saveExtTemplate, onVideoPreset, onVideoAgent, onVideoContent, onVideoLength, onVideoScript, onVideoKeepTheme, onVideoInstructions, planFromModal, closeModal, onBackdrop,
     onVideoDrive, onVideoDriveToken, onVideoDriveShare, laneChoice, onVideoSplit, openDriveSync, startDriveSync, syncThenDelete, resumeLane,
     openClone, onCloneLang, startClone, openRetry, startRetry,
   };

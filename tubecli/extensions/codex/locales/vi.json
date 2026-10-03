@@ -347,6 +347,9 @@
   "codex.ext_images_count": "Đã chọn {n} ảnh",
   "codex.ext_uploading": "Đang tải ảnh lên… {n}/{total}",
   "codex.ext_select_pick": "— chọn —",
+  "codex.ext_tpl_save": "Lưu thành mẫu",
+  "codex.ext_tpl_name": "Tên mẫu (dùng chung với Content Studio)",
+  "codex.ext_tpl_saved": "Đã lưu mẫu «{name}» — Content Studio cũng dùng được",
   "codex.toast_ext_required": "Còn thiếu: {field}",
   "codex.created_ext_title": "Việc #{seq} đã vào hàng",
   "codex.created_ext_desc": "Dây chuyền chạy trên máy này; theo dõi từng bước ngay trên bảng."

@@ -347,6 +347,9 @@
   "codex.ext_images_count": "Выбрано изображений: {n}",
   "codex.ext_uploading": "Загрузка изображений… {n}/{total}",
   "codex.ext_select_pick": "— выбрать —",
+  "codex.ext_tpl_save": "Сохранить как шаблон",
+  "codex.ext_tpl_name": "Название шаблона (общий с Content Studio)",
+  "codex.ext_tpl_saved": "Шаблон «{name}» сохранён — Content Studio тоже может его использовать",
   "codex.toast_ext_required": "Заполните: {field}",
   "codex.created_ext_title": "Задача #{seq} в очереди",
   "codex.created_ext_desc": "Конвейер выполняется на этом сервере; следите за шагами на доске."

@@ -870,3 +870,6 @@ body {
 .cx-x-previews { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .cx-x-previews img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(128,128,128,.35); }
 .cx-req { color: #f87171; }
+/* «Lưu thành mẫu» của form loại việc do extension khai (kho mẫu chung, 3/10/2026) */
+.cx-x-tpl { display: flex; justify-content: flex-end; margin-top: 4px; }
+.cx-x-tpl .material-symbols-outlined { font-size: 1rem; margin-right: 4px; vertical-align: -3px; }

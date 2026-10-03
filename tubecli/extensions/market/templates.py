@@ -65,10 +65,18 @@ def _record(public_id: str, title: str, version: str, saved: List[str]) -> None:
 
 
 def _preset_names() -> set:
+    """Tên mẫu đang có: kho mẫu chung của lõi (từ 3/10/2026, Pod Studio cũng dùng) ∪ presets.json cũ của Studio
+    (Studio bản cũ chưa chuyển sang kho chung vẫn chỉ ghi file này)."""
     rows = _read_json(os.path.join(_studio_dir(), "presets.json"), [])
     if isinstance(rows, dict):
         rows = list(rows.values())
-    return {str(r.get("name") or "") for r in rows if isinstance(r, dict)}
+    names = {str(r.get("name") or "") for r in rows if isinstance(r, dict)}
+    try:
+        from tubecli.core import templates as _shared
+        names |= {str(t.get("name") or "") for t in _shared.list_templates()}
+    except Exception:      # noqa: BLE001
+        pass
+    return names
 
 
 def installed(public_id: str, title: str) -> Dict[str, Any]:

@@ -347,6 +347,9 @@
   "codex.ext_images_count": "{n} görsel seçildi",
   "codex.ext_uploading": "Görseller yükleniyor… {n}/{total}",
   "codex.ext_select_pick": "— seçin —",
+  "codex.ext_tpl_save": "Şablon olarak kaydet",
+  "codex.ext_tpl_name": "Şablon adı (Content Studio ile ortak)",
+  "codex.ext_tpl_saved": "«{name}» şablonu kaydedildi — Content Studio da kullanabilir",
   "codex.toast_ext_required": "Eksik: {field}",
   "codex.created_ext_title": "Görev #{seq} kuyruğa alındı",
   "codex.created_ext_desc": "İş hattı bu sunucuda çalışır; adımları panodan izleyin."
