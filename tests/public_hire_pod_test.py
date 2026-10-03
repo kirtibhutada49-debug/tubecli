@@ -169,7 +169,7 @@ def fake_post(path, body):
 def fake_http(path):
     if path.endswith("/events"):
         return {"events": [{"data": {"step": "clips", "status": "running"}}]}
-    return {"task": {"status": state["status"][min(state["phase"], len(state["status"]) - 1)]}}
+    return {"task": {"status": state["status"][min(state["phase"], len(state["status"]) - 1)], "error": state.get("error", "")}}
 
 
 final_mp4 = os.path.join(TMP, "final.mp4")
@@ -213,6 +213,25 @@ reports.clear()
 asyncio.run(run_fast("pod222222222"))
 check("task Pod hỏng → báo failed (cloud hoàn tiền)", any(r["status"] == "failed" for r in reports)
       and ph._jobs["pod222222222"]["status"] == "failed")
+# Muse trả CHỮ thay cho ảnh (việc thuê #164, 3/10/2026) → mã image_refused + lời AI cho khách, đã lột đường dẫn/link
+refusal = ("MuseError: Muse did not draw an image: I couldn't generate that image. If you'd like, I can do Cut 1 in the "
+           r"elegant long áo dài instead (C:\tubecreate-vue\tubecli\data\x.jpg, https://muse.ai/c/1) — just say go.")
+ph._jobs["podr00000000"] = {**ph._jobs["pod111111111"], "code": "podr00000000", "status": "running"}
+state.update(phase=0, status=["running", "failed"], error=refusal)
+reports.clear()
+asyncio.run(run_fast("podr00000000"))
+fr = [r for r in reports if r["status"] == "failed"]
+check("Muse không vẽ ảnh → báo image_refused + lời AI (không đường dẫn, không link)",
+      len(fr) == 1 and fr[0].get("err") == "image_refused" and "áo dài" in fr[0].get("note", "")
+      and "tubecreate-vue" not in fr[0]["note"] and "muse.ai" not in fr[0]["note"] and len(fr[0]["note"]) <= 400, fr)
+check("Muse không làm video → video_refused", ph.pod_failure("MuseError: Muse did not make a video: Sorry.") == ("video_refused", "Sorry."))
+check("lỗi máy (ffmpeg, đường dẫn) → job_failed, KHÔNG gửi chữ", ph.pod_failure("ffmpeg failed: C:/x/y.mp4") == ("job_failed", ""))
+state.update(phase=0, status=["running", "cancelled"], error=refusal)
+ph._jobs["podc00000000"] = {**ph._jobs["pod111111111"], "code": "podc00000000", "status": "running"}
+reports.clear()
+asyncio.run(run_fast("podc00000000"))
+check("chủ huỷ task → job_failed, không kèm lời AI", [(r.get("err"), r.get("note")) for r in reports if r["status"] == "failed"] == [("job_failed", None)], reports)
+state.pop("error", None)
 ph._http_post_json = lambda path, body: {"detail": "Add at least one model/character photo."}
 ph._jobs["podq00000000"] = {**ph._jobs["pod111111111"], "code": "podq00000000", "task_id": "", "status": "accepted"}
 reports.clear()

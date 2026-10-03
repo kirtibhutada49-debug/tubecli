@@ -124,7 +124,7 @@ def _report_blocking(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _report(job: Dict[str, Any], status: str, step: str = "", pct: int = 0,
-                  files: Optional[list] = None, seconds: int = 0, err: str = "") -> Dict[str, Any]:
+                  files: Optional[list] = None, seconds: int = 0, err: str = "", note: str = "") -> Dict[str, Any]:
     body: Dict[str, Any] = {"job": job["code"], "status": status, "step": step[:48],
                             "pct": max(0, min(100, int(pct)))}
     if files is not None:
@@ -133,6 +133,8 @@ async def _report(job: Dict[str, Any], status: str, step: str = "", pct: int = 0
         body["seconds"] = int(seconds)
     if err:
         body["err"] = err[:40]
+    if note:
+        body["note"] = note[:400]        # cloud cũ bỏ qua khoá lạ
     out = await asyncio.to_thread(_report_blocking, job["code"], body)
     if out.get("closed"):
         # Việc đã đóng phía cloud (khách huỷ / hết hạn / đã chốt) — ngừng theo, đóng sổ.
@@ -391,6 +393,24 @@ def _pod_final(task_id: str) -> str:
         return ""
 
 
+# Muse trả CHỮ thay cho ảnh/video (từ chối nội dung, hay đề nghị vẽ khác) — việc thuê #164 (3/10/2026): khách chỉ thấy
+# «việc hỏng» mà không biết sửa gì. Tách lời AI ra gửi kèm mã riêng để thẻ việc nói cho khách biết mà sửa bối cảnh/yêu
+# cầu. Lỗi khác (máy, mạng, ffmpeg…) KHÔNG gửi chữ: người lạ không cần đọc đường dẫn hay lỗi nội bộ của máy chủ agent.
+_MUSE_NO_OUTPUT_RE = re.compile(r"Muse did not (draw an image|make a video)\s*[:.]?\s*(.*)", re.S | re.I)
+_NOTE_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|/(?:home|root|tmp|var|Users|opt)/)\S*")
+_NOTE_URL_RE = re.compile(r"https?://\S+", re.I)
+
+
+def pod_failure(error: str) -> tuple:
+    """(mã lỗi cho cloud, lời giải thích cho khách) từ lỗi của task Pod."""
+    m = _MUSE_NO_OUTPUT_RE.search(str(error or ""))
+    if not m:
+        return "job_failed", ""
+    said = _NOTE_URL_RE.sub("", _NOTE_PATH_RE.sub("", m.group(2) or ""))
+    said = " ".join(said.split())[:400]
+    return ("image_refused" if m.group(1).lower().startswith("draw") else "video_refused"), said
+
+
 async def _run_pod(code: str) -> None:
     """Việc «video quảng cáo từ ảnh»: xếp task «Video từ ảnh tham chiếu» của Pod Studio lên Bảng việc của chủ (nhãn AI
     BẬT CỨNG, origin mang mã việc), bám tiến độ, giao video đã ghép. Cấu trúc như _run của content_video."""
@@ -436,7 +456,8 @@ async def _run_pod(code: str) -> None:
         st = str(t.get("status") or "").lower()
         step = _latest_step(evs)
         if st in ("failed", "error", "cancelled", "canceled"):
-            await _report(job, "failed", err="job_failed")
+            err, note = pod_failure(t.get("error")) if st in ("failed", "error") else ("job_failed", "")
+            await _report(job, "failed", err=err, note=note)
             job["status"] = "failed"
             _save(job)
             return
