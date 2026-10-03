@@ -11,6 +11,10 @@ khoản hết tới giờ đặt lại, chuyển sang tài khoản còn hạn m�
 
 Đăng nhập / thử hạn mức tài khoản KHÔNG đang dùng chạy app-server TẠM với CODEX_HOME riêng
 (<root>/tmp/…) — không đụng phiên đang chạy.
+
+Công cụ TubeCLI (tools.py): khối tự quản trong home/config.toml đăng ký MCP «tubecli» (mcp_relay.py) + vùng ghi
+của sandbox = vùng cho phép của TubeCLI (File Manager). Lệnh THAY ĐỔI qua công cụ hỏi chủ máy bằng thẻ duyệt
+(kind "tool") trừ khi bật «Không cần hỏi» (settings.tools_auto).
 """
 from __future__ import annotations
 
@@ -22,9 +26,10 @@ import os
 import re
 import secrets
 import shutil
+import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from . import accounts as A
 from . import cli
@@ -43,9 +48,18 @@ IDLE_STOP_S = 1200
 # Lời nhắn gửi Codex sau khi tự đổi tài khoản (lời cho AI viết tiếng Anh — quy ước của dự án).
 CONTINUE_TEXT = ("The previous attempt stopped because the subscription hit its usage limit; the session now "
                  "runs on another account. Continue exactly where you left off — do not repeat finished work.")
-SETTINGS_DEFAULT = {"model": "", "effort": "", "approval": "never", "sandbox": "workspace-write", "cwd": ""}
+SETTINGS_DEFAULT = {"model": "", "effort": "", "approval": "never", "sandbox": "workspace-write", "cwd": "",
+                    "tools": True, "tools_auto": False}
 APPROVAL_POLICIES = ("never", "on-request", "untrusted")
 SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
+TOOL_TIMEOUT_S = 1800            # Codex chờ một lời gọi công cụ tối đa chừng này (gồm cả lúc chờ chủ duyệt)
+TOOL_APPROVAL_WAIT_S = 1700      # thẻ duyệt tự từ chối trước khi Codex bỏ cuộc
+CFG_BEGIN = "# >>> TubeCLI Codex GPT (managed: edits inside this block are overwritten) >>>"
+CFG_END = "# <<< TubeCLI Codex GPT <<<"
+RELAY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_relay.py")
+TOOL_DECLINED = ("The owner declined this TubeCLI action. Do not retry it; ask the owner what to do instead.")
+TOOL_NO_VIEWER = ("Nobody has the Codex GPT panel open to approve this TubeCLI action. Ask the owner to open Codex "
+                  "GPT in TubeCLI, or to turn on «Don't ask» for TubeCLI tools in its settings.")
 
 
 class GptError(Exception):
@@ -98,6 +112,10 @@ class CodexGptService:
         self._gen = 0
         self._models: Dict[str, Any] = {"acc": None, "at": 0.0, "data": []}
         self._reaper: Optional[asyncio.Task] = None
+        self.api_port: Optional[int] = None                 # cổng TubeCLI thật — lấy từ request (routes.note_port)
+        self.tool_items: Dict[str, Dict[str, Any]] = {}     # lời gọi công cụ tubecli đang chạy → phiên nào
+        self.tool_session_ok: Set[str] = set()              # phiên đã «Cho phép trong phiên này»
+        self.win_sandbox: Dict[str, Any] = {}               # {"status", "setup": running|failed|done, "error"}
 
     # ── đường dẫn + trạng thái ───────────────────────────────────────────────
     @property
@@ -187,6 +205,167 @@ class CodexGptService:
         A._atomic_write(dst, A.read_auth(acc_id), private=True)
         self._marker().write_text(acc_id, encoding="utf-8")
 
+    # ── công cụ TubeCLI: cổng, khoá, vùng ghi, config.toml ───────────────────
+    def note_port(self, port: Any) -> None:
+        try:
+            p = int(port)
+        except (TypeError, ValueError):
+            return
+        if 0 < p < 65536:
+            self.api_port = p
+
+    def port(self) -> int:
+        if self.api_port:
+            return self.api_port
+        try:
+            from tubecli.config import get_api_port
+            return int(get_api_port())
+        except Exception:
+            return 5295
+
+    def mcp_key(self) -> str:
+        st = self.state()
+        if not st.get("mcp_key"):
+            st["mcp_key"] = secrets.token_urlsafe(24)
+            self.save_state(st)
+        return st["mcp_key"]
+
+    def _data_dirs(self) -> List[str]:
+        out = {os.path.normcase(os.path.abspath(os.environ.get("TUBECLI_DATA_DIR", "data")))}
+        try:
+            from tubecli.config import DATA_DIR
+            out.add(os.path.normcase(os.path.abspath(str(DATA_DIR))))
+        except Exception:
+            pass
+        return list(out)
+
+    def writable_roots(self) -> List[str]:
+        """Vùng Codex được GHI = vùng cho phép của AI TubeCLI (File Manager: Desktop/Documents/Downloads + thêm),
+        TRỪ thư mục data (két, nhóm, khoá API nằm trong đó — sandbox Codex không trừ được thư mục con), CỘNG
+        thư mục làm việc riêng của Codex GPT."""
+        try:
+            from tubecli.extensions.file_manager.file_service import file_service
+            roots = list(file_service.allowed_roots)
+        except Exception:
+            roots = [os.path.expanduser(p) for p in ("~/Desktop", "~/Documents", "~/Downloads")]
+        data = self._data_dirs()
+        out: List[str] = []
+        for r in roots:
+            r = os.path.normpath(os.path.abspath(r))
+            rc = os.path.normcase(r)
+            if any(rc == d or rc.startswith(d + os.sep) for d in data) or not os.path.isdir(r):
+                continue
+            if r not in out:
+                out.append(r)
+        out.append(str(self.workspace))
+        return out
+
+    def _cwd_allowed(self, cwd: str, sandbox: str) -> bool:
+        if sandbox == "danger-full-access":
+            return True
+        c = os.path.normcase(os.path.abspath(cwd))
+        return any(c == os.path.normcase(r) or c.startswith(os.path.normcase(r) + os.sep) for r in self.writable_roots())
+
+    def _write_codex_config(self) -> None:
+        """Khối tự quản trong home/config.toml: MCP «tubecli» + writable_roots. Phần người dùng tự viết giữ nguyên;
+        bảng họ đã tự khai thì KHÔNG khai lại (TOML trùng bảng = Codex không khởi động được)."""
+        self.home.mkdir(parents=True, exist_ok=True)
+        p = self.home / "config.toml"
+        try:
+            cur = p.read_text(encoding="utf-8")
+        except OSError:
+            cur = ""
+        user = re.sub(re.escape(CFG_BEGIN) + r".*?" + re.escape(CFG_END) + r"\n?", "", cur, flags=re.S).rstrip()
+        q = json.dumps
+        lines: List[str] = []
+        if self.state()["settings"].get("tools") and not re.search(r"^\s*\[mcp_servers\.tubecli[\].]", user, re.M):
+            url = f"http://127.0.0.1:{self.port()}/api/v1/codex-gpt/mcp"
+            # default_tools_approval_mode = "approve": Codex KHÔNG tự đòi duyệt công cụ «không chỉ-đọc» (với
+            # approval=never nó từ chối thẳng — thử thật 3/10/2026); duyệt do TubeCLI làm (tools.call_tool → thẻ).
+            lines += ["[mcp_servers.tubecli]", f"command = {q(sys.executable)}", f"args = [{q(RELAY)}]",
+                      "startup_timeout_sec = 30", f"tool_timeout_sec = {TOOL_TIMEOUT_S}",
+                      'default_tools_approval_mode = "approve"', "",
+                      "[mcp_servers.tubecli.env]", f"TUBECLI_CG_URL = {q(url)}", f"TUBECLI_CG_KEY = {q(self.mcp_key())}",
+                      f"TUBECLI_CG_TIMEOUT = {q(str(TOOL_TIMEOUT_S))}", f"PYTHONIOENCODING = {q('utf-8')}", ""]
+        if not re.search(r"^\s*\[sandbox_workspace_write\]", user, re.M):
+            lines += ["[sandbox_workspace_write]",
+                      "writable_roots = [" + ", ".join(q(r) for r in self.writable_roots()) + "]"]
+        block = CFG_BEGIN + "\n" + "\n".join(lines).strip() + "\n" + CFG_END + "\n"
+        new = (user + "\n\n" if user else "") + block
+        if new != cur:
+            A._atomic_write(p, new.encode("utf-8"))
+
+    def _session_opts(self) -> Dict[str, Any]:
+        """Tham số mở phiên (thread/start, thread/resume): chế độ duyệt/sandbox + lời dặn về công cụ TubeCLI."""
+        opts = self._thread_opts()
+        if self.state()["settings"].get("tools"):
+            from .tools import INSTRUCTIONS
+            opts["developerInstructions"] = INSTRUCTIONS
+        return opts
+
+    def _thread_for_tool(self, tool: str, args: Dict[str, Any]) -> Optional[str]:
+        """Lời gọi MCP không mang id phiên → so với item mcpToolCall Codex vừa báo (cùng tên, cùng tham số)."""
+        best = None
+        for it in sorted(self.tool_items.values(), key=lambda x: x["at"], reverse=True):
+            if it["tool"] != tool:
+                continue
+            if it["args"] == args:
+                return it["thread"]
+            best = best or it["thread"]
+        return best
+
+    async def tool_approval(self, tool: str, detail: str, args: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
+        """(được, lý do cho Codex, phiên). Hỏi bằng thẻ duyệt trong khung chat của phiên gọi."""
+        tid = self._thread_for_tool(tool, args)
+        if self.state()["settings"].get("tools_auto") or (tid and tid in self.tool_session_ok):
+            return True, "", tid
+        if not self.subscribers:
+            return False, TOOL_NO_VIEWER, tid
+        key = f"t{self._gen}-{secrets.token_hex(4)}"
+        fut = asyncio.get_running_loop().create_future()
+        params = {"threadId": tid, "tool": tool, "detail": detail[:2000]}
+        self.approvals[key] = {"kind": "tool", "method": "tubecli/tool", "params": params, "future": fut, "at": _now()}
+        await self.broadcast({"type": "approval", "key": key, "method": "tubecli/tool", "params": params})
+        decision = "decline"
+        try:
+            decision = await asyncio.wait_for(asyncio.shield(fut), TOOL_APPROVAL_WAIT_S)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            if self.approvals.pop(key, None) is not None:        # hết giờ / Codex bỏ lời gọi → gỡ thẻ
+                await self.broadcast({"type": "approval_done", "key": key, "decision": "decline"})
+        if decision in ("accept", "acceptForSession"):
+            return True, "", tid
+        return False, TOOL_DECLINED, tid
+
+    async def _decline_tools(self, tid: Optional[str]) -> None:
+        for k, a in list(self.approvals.items()):
+            if a.get("kind") == "tool" and (tid is None or a["params"].get("threadId") == tid):
+                await self.answer_approval(k, "decline")
+
+    # ── sandbox Codex trên Windows ───────────────────────────────────────────
+    async def win_sandbox_status(self) -> Dict[str, Any]:
+        if os.name != "nt" and not os.environ.get("TUBECLI_CODEX_FAKE_WINDOWS"):
+            return {"status": "unsupported"}
+        b = await self.ensure_bridge()
+        r = await b.request("windowsSandbox/readiness", None, timeout=30)
+        self.win_sandbox["status"] = (r or {}).get("status") or "unknown"
+        return dict(self.win_sandbox)
+
+    async def win_sandbox_setup(self, mode: str = "unelevated") -> Dict[str, Any]:
+        if mode not in ("unelevated", "elevated"):
+            raise GptError("bad_setting", "Unknown sandbox setup mode", 400)
+        b = await self.ensure_bridge()
+        self.win_sandbox.update(setup="running", error="")
+        try:
+            r = await b.request("windowsSandbox/setupStart", {"mode": mode, "cwd": str(self.workspace)}, timeout=60)
+        except RpcError as e:
+            self.win_sandbox.update(setup="failed", error=str(e))
+            raise
+        if not (r or {}).get("started"):
+            self.win_sandbox.update(setup="failed", error="setup did not start")
+        return dict(self.win_sandbox)
+
     # ── app-server chính ─────────────────────────────────────────────────────
     async def ensure_bridge(self) -> AppServer:
         async with self.lock:
@@ -205,8 +384,13 @@ class CodexGptService:
                 st["active"] = acc_id
                 self.save_state(st)
             self._install_auth(acc_id)
+            try:
+                self._write_codex_config()
+            except OSError as e:
+                logger.warning(f"[codex-gpt] cannot write config.toml: {e}")
             self.loaded.clear()
             self.active_turns.clear()
+            self.tool_items.clear()
             self._gen += 1
             srv = AppServer(cmd, str(self.home), str(self.workspace), name="main",
                             on_notify=self._on_notify, on_request=self._on_request)
@@ -273,6 +457,8 @@ class CodexGptService:
         elif method == "turn/completed" and tid:
             self.active_turns.pop(tid, None)
             self._sync_back()
+            self.tool_items = {k: v for k, v in self.tool_items.items() if v["thread"] != tid}
+            await self._decline_tools(tid)
             turn = params.get("turn") or {}
             err = turn.get("error") or {}
             if turn.get("status") == "failed" and err and _is_usage_limit(err):
@@ -283,6 +469,19 @@ class CodexGptService:
                 self.loaded.add(t)
         elif method == "account/rateLimits/updated":
             self._store_limits(params.get("rateLimits"))
+        elif method in ("item/started", "item/completed"):
+            it = params.get("item") or {}
+            if it.get("type") == "mcpToolCall" and it.get("server") == "tubecli" and it.get("id"):
+                if method == "item/started":
+                    args = it.get("arguments") if isinstance(it.get("arguments"), dict) else {}
+                    self.tool_items[it["id"]] = {"thread": tid, "tool": it.get("tool"), "at": time.time(), "args": args}
+                else:
+                    self.tool_items.pop(it["id"], None)
+        elif method == "windowsSandbox/setupCompleted":
+            ok = bool(params.get("success"))
+            self.win_sandbox.update(setup="done" if ok else "failed", error=str(params.get("error") or ""))
+            if ok:
+                self.win_sandbox["status"] = "ready"
         if method in _QUIET:
             return
         await self.broadcast({"type": "event", "method": method, "params": params})
@@ -325,6 +524,15 @@ class CodexGptService:
         a = self.approvals.pop(key, None)
         if a is None:
             return False
+        if a.get("kind") == "tool":
+            if decision not in ("accept", "acceptForSession"):
+                decision = "decline"
+            if decision == "acceptForSession" and a["params"].get("threadId"):
+                self.tool_session_ok.add(a["params"]["threadId"])
+            if not a["future"].done():
+                a["future"].set_result(decision)
+            await self.broadcast({"type": "approval_done", "key": key, "decision": decision})
+            return True
         b = a["bridge"]
         if b is not self.bridge or not b.alive:
             return False
@@ -339,7 +547,7 @@ class CodexGptService:
 
     def pending_approvals(self) -> List[Dict[str, Any]]:
         return [{"key": k, "method": v["method"], "params": v["params"]} for k, v in self.approvals.items()
-                if v["bridge"] is self.bridge]
+                if v.get("kind") == "tool" or v.get("bridge") is self.bridge]
 
     # ── tự chuyển tài khoản khi hết hạn mức ──────────────────────────────────
     async def _handle_limit(self, tid: str) -> None:
@@ -426,8 +634,10 @@ class CodexGptService:
         """Mức suy luận (effort) đặt theo từng lượt ở send() — thread/start không nhận nó."""
         st = self.state()
         cwd = self._check_cwd(cwd or st["settings"].get("cwd") or "")
+        if not self._cwd_allowed(cwd, st["settings"]["sandbox"]):
+            raise GptError("outside_roots", "This folder is outside the areas TubeCLI lets AI write to", 400)
         b = await self.ensure_bridge()
-        params: Dict[str, Any] = {"cwd": cwd, "serviceName": "tubecli", **self._thread_opts()}
+        params: Dict[str, Any] = {"cwd": cwd, "serviceName": "tubecli", **self._session_opts()}
         m = model or st["settings"].get("model")
         if m:
             params["model"] = m
@@ -443,7 +653,7 @@ class CodexGptService:
     async def _ensure_loaded(self, b: AppServer, tid: str) -> None:
         if tid in self.loaded:
             return
-        await b.request("thread/resume", {"threadId": tid, "excludeTurns": True, **self._thread_opts()}, timeout=90)
+        await b.request("thread/resume", {"threadId": tid, "excludeTurns": True, **self._session_opts()}, timeout=90)
         self.loaded.add(tid)
 
     async def send(self, tid: str, text: str, user: bool = True, model: str = "", effort: str = "") -> Dict[str, Any]:
@@ -717,10 +927,25 @@ class CodexGptService:
             s["sandbox"] = patch["sandbox"]
         if "cwd" in patch:
             s["cwd"] = self._check_cwd(str(patch["cwd"] or "")) if patch["cwd"] else ""
+        if s["cwd"] and not self._cwd_allowed(s["cwd"], s["sandbox"]):
+            raise GptError("outside_roots", "This folder is outside the areas TubeCLI lets AI write to", 400)
+        for k in ("tools", "tools_auto"):
+            if k in patch:
+                s[k] = bool(patch[k])
         self.save_state(st)
-        if "approval" in patch or "sandbox" in patch:
+        if "approval" in patch or "sandbox" in patch or "tools" in patch:
             self.loaded.clear()                 # lượt sau mở lại phiên với chế độ mới
         return {"auto_switch": st["auto_switch"], "settings": st["settings"]}
+
+    async def apply_settings(self, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """Bật/tắt công cụ TubeCLI = đổi config.toml → app-server phải khởi động lại mới nạp (MCP mở lúc khởi động).
+        Đang có lượt chạy thì để lần khởi động sau."""
+        before = self.state()["settings"].get("tools")
+        out = self.update_settings(patch)
+        if "tools" in patch and bool(patch["tools"]) != bool(before) and not self.active_turns:
+            async with self.lock:
+                await self._stop_bridge()
+        return out
 
     async def status(self) -> Dict[str, Any]:
         ver = await asyncio.to_thread(cli.version)
@@ -731,7 +956,8 @@ class CodexGptService:
                 "settings": st["settings"], "recent_cwds": st["recent_cwds"], "workspace": str(self.workspace),
                 "home": str(self.home), "continue_text": CONTINUE_TEXT,
                 "bridge": {"running": bool(self.bridge and self.bridge.alive), "error": self.bridge_error},
-                "running": dict(self.active_turns), "platform": "windows" if os.name == "nt" else "posix"}
+                "running": dict(self.active_turns), "platform": "windows" if os.name == "nt" else "posix",
+                "writable_roots": self.writable_roots(), "win_sandbox": dict(self.win_sandbox)}
 
 
 service = CodexGptService()

@@ -8,16 +8,26 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.requests import HTTPConnection
 
 from . import cli
 from .rpc import RpcError
 from .service import GptError, service
 
-router = APIRouter()
+
+def _note_port(conn: HTTPConnection) -> None:
+    """Cổng TubeCLI THẬT (scope server) — ống MCP của Codex gọi về đúng cổng này, kể cả khi chạy --port khác."""
+    srv = conn.scope.get("server") or ()
+    if len(srv) >= 2:
+        service.note_port(srv[1])
+
+
+router = APIRouter(dependencies=[Depends(_note_port)])
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 API = "/api/v1/codex-gpt"
 
@@ -85,9 +95,41 @@ async def install():
 @router.put(API + "/settings")
 async def settings(request: Request):
     try:
-        return _ok(**service.update_settings(await _body(request)))
+        return _ok(**(await service.apply_settings(await _body(request))))
     except GptError as e:
         return _fail(e)
+
+
+@router.get(API + "/windows-sandbox")
+async def windows_sandbox():
+    try:
+        return _ok(**(await service.win_sandbox_status()))
+    except (GptError, RpcError) as e:
+        return _fail(e)
+
+
+@router.post(API + "/windows-sandbox/setup")
+async def windows_sandbox_setup(request: Request):
+    b = await _body(request)
+    try:
+        return _ok(**(await service.win_sandbox_setup(str(b.get("mode") or "unelevated"))))
+    except (GptError, RpcError) as e:
+        return _fail(e)
+
+
+# ── công cụ TubeCLI cho Codex (MCP) ──────────────────────────────────────────
+@router.post(API + "/mcp", include_in_schema=False)
+async def mcp(request: Request):
+    """Chỉ ống mcp_relay.py trên CHÍNH máy này gọi: loopback, không qua proxy/tunnel, đúng khoá trong config.toml.
+    Duyệt lệnh thay đổi nằm trong tools.call_tool → service.tool_approval — biết khoá cũng không bỏ qua được."""
+    from tubecli.core.auth import behind_proxy, is_loopback
+
+    from . import tools
+    host = request.client.host if request.client else ""
+    key = request.headers.get("x-codex-gpt-key") or ""
+    if not is_loopback(host) or behind_proxy(request.headers) or not secrets.compare_digest(key, service.mcp_key()):
+        return JSONResponse({"error": {"code": -32001, "message": "forbidden"}}, status_code=403)
+    return await tools.handle_rpc(await _body(request), request.app, service.tool_approval)
 
 
 @router.get(API + "/models")

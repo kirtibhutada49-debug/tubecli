@@ -248,3 +248,18 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "
   .cg-usage { display: none; }
 }
 :root[data-embed="1"] .cg-top { padding: 6px 10px; }
+
+/* Thanh báo sandbox Windows (dùng khung #notice trên ô soạn tin) */
+.cg-winbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--orange) 50%, transparent); background: color-mix(in srgb, var(--orange) 9%, transparent); font-size: 12.5px; }
+.cg-winbar-txt { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 2px; }
+.cg-winbar-txt span { color: var(--text2); }
+.cg-winbar-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.cg-winbar .cg-spin { width: 10px; height: 10px; vertical-align: -1px; }
+/* Lời gọi công cụ: tham số, lỗi, ảnh chụp trang */
+.cg-tool .cg-tool-args { color: var(--text2); }
+.cg-tool .cg-tool-err { color: var(--red); }
+.cg-tool-img { display: block; max-width: 100%; max-height: 420px; margin: 8px 10px 10px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+.cg-roots { display: flex; flex-direction: column; gap: 4px; }
+.cg-roots code { font-size: 11.5px; padding: 3px 7px; border-radius: 6px; background: var(--code-bg); overflow-wrap: anywhere; }
+.cg-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }

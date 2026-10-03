@@ -256,6 +256,13 @@ def handle(msg):
         res = {"data": [{"id": "gpt-5.5", "displayName": "GPT-5.5", "defaultReasoningEffort": "medium", "hidden": False,
                          "isDefault": True, "supportedReasoningEfforts": [{"reasoningEffort": e} for e in ("low", "medium", "high")]},
                         {"id": "hidden-x", "displayName": "X", "hidden": True}]}
+    elif method == "windowsSandbox/readiness":
+        res = {"status": c.get("winsb", "notConfigured")}
+    elif method == "windowsSandbox/setupStart":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"started": True}})
+        ok = c.get("winsb_setup", "ok") == "ok"
+        notify("windowsSandbox/setupCompleted", {"mode": p.get("mode"), "success": ok, "error": None if ok else "denied"})
+        return
     else:
         err = {"code": -32601, "message": f"unknown method {method}"}
     out = {"jsonrpc": "2.0", "id": rid}

@@ -74,7 +74,8 @@
   }
   function errText(e) {
     const map = { not_installed: 'cg.err.not_installed', no_account: 'cg.err.no_account', busy: 'cg.err.busy',
-      cwd_missing: 'cg.err.cwd_missing', bad_key: 'cg.err.bad_key', bad_auth: 'cg.err.bad_auth', start_failed: 'cg.err.start_failed' };
+      cwd_missing: 'cg.err.cwd_missing', bad_key: 'cg.err.bad_key', bad_auth: 'cg.err.bad_auth', start_failed: 'cg.err.start_failed',
+      outside_roots: 'cg.err.outside_roots' };
     return e && e.code && map[e.code] ? T(map[e.code], null, e.message) : (e && e.message) || String(e);
   }
 
@@ -185,6 +186,41 @@
     $('chat').hidden = false;
     S.running = st.running || {};
     if (!S.models.length) loadModels();
+    checkWinSandbox();
+  }
+
+  /* ── sandbox Codex trên Windows ───────────────────────────────────────────
+     Chưa cài thì Codex lặng lẽ hạ «chỉ sửa thư mục làm việc» thành CHỈ ĐỌC và chặn mọi lệnh (3/10/2026: Codex
+     không đọc nổi Bảng việc vì thế) → nói thẳng, kèm hai lối ra. */
+  async function checkWinSandbox() {
+    const st = S.status || {};
+    if (st.platform !== 'windows' || (st.settings || {}).sandbox === 'danger-full-access') { S.winsb = null; renderWinBar(); return; }
+    try { S.winsb = await api('/windows-sandbox'); } catch (e) { S.winsb = null; }
+    renderWinBar();
+  }
+  function renderWinBar() {
+    const bar = $('notice');
+    const w = S.winsb;
+    const st = S.status || {};
+    if (!w || w.status === 'ready' || w.status === 'unsupported' || (st.settings || {}).sandbox === 'danger-full-access') { bar.hidden = true; bar.innerHTML = ''; return; }
+    const running = w.setup === 'running';
+    bar.hidden = false;
+    bar.className = 'cg-notice cg-winbar';
+    bar.innerHTML = '<div class="cg-winbar-txt"><b>⚠ ' + esc(T('cg.winsb_title', null, "Codex's Windows sandbox isn't set up")) + '</b>'
+      + '<span>' + esc(w.setup === 'failed' ? T('cg.winsb_failed', { e: w.error || '' }, 'Setup failed: {e}') : T('cg.winsb_desc', null, 'Without it Codex can only read — every command is blocked.')) + '</span></div>'
+      + '<div class="cg-winbar-acts"><button type="button" class="cg-btn cg-btn-pri cg-btn-sm" id="wbSetup"' + (running ? ' disabled' : '') + '>'
+      + (running ? '<span class="cg-spin"></span> ' + esc(T('cg.winsb_running', null, 'Setting up…')) : esc(T('cg.winsb_setup', null, 'Set up Windows sandbox'))) + '</button>'
+      + '<button type="button" class="cg-btn cg-btn-sm" id="wbFull"' + (running ? ' disabled' : '') + '>' + esc(T('cg.winsb_full', null, 'Use full access')) + '</button></div>';
+    $('wbSetup').onclick = async () => {
+      try { S.winsb = await api('/windows-sandbox/setup', { method: 'POST', body: { mode: 'unelevated' } }); }
+      catch (e) { S.winsb = Object.assign({}, S.winsb, { setup: 'failed', error: errText(e) }); }
+      renderWinBar();
+    };
+    $('wbFull').onclick = async () => {
+      if (!confirm(T('cg.winsb_full_confirm', null, 'Codex will be able to change any file on this machine. Continue?'))) return;
+      try { await api('/settings', { method: 'PUT', body: { sandbox: 'danger-full-access' } }); await refreshStatus(); renderHead(); }
+      catch (e) { toast(errText(e), 5000); }
+    };
   }
 
   function showOnboard(kind, extra) {
@@ -352,7 +388,7 @@
     notes.forEach((n) => { const d = document.createElement('div'); d.className = n.kind === 'err' ? 'cg-err' : 'cg-info'; d.textContent = n.text; tail.appendChild(d); });
     Object.keys(S.approvals).forEach((k) => {
       const a = S.approvals[k];
-      if ((a.params || {}).threadId === S.cur) tail.appendChild(approvalEl(k, a));
+      if (approvalHere(a)) tail.appendChild(approvalEl(k, a));
     });
     if (S.running[S.cur]) {
       const th = document.createElement('div');
@@ -444,7 +480,7 @@
     } else if (t === 'webSearch') {
       el = cardEl('🔎 ' + (it.query || T('cg.web_search', null, 'Web search')), '', '');
     } else if (t === 'mcpToolCall' || t === 'dynamicToolCall') {
-      el = cardEl('🔧 ' + [it.server, it.tool, it.namespace].filter(Boolean).join(' · '), stLabel(it.status), it.error ? '<pre>' + esc(JSON.stringify(it.error)) + '</pre>' : '');
+      el = toolCardEl(it);
     } else if (t === 'imageView' || t === 'imageGeneration') {
       el = cardEl('🖼 ' + (it.path || it.savedPath || it.revisedPrompt || T('cg.image', null, 'Image')), it.status || '', '');
     } else if (t === 'contextCompaction') {
@@ -460,10 +496,44 @@
     return el;
   }
 
+  // Thẻ duyệt của công cụ TubeCLI có thể không biết phiên (gọi từ terminal, hoặc chưa khớp item) → hiện ở phiên đang mở.
+  function approvalHere(a) {
+    const p = a.params || {};
+    return p.threadId === S.cur || (a.method === 'tubecli/tool' && !p.threadId && !!S.cur);
+  }
+  function toolName(n) { return T('cg.tool.' + n, null, n); }
+  function toolCardEl(it) {
+    const isTc = it.server === 'tubecli';
+    const label = isTc ? '🧰 TubeCLI · ' + toolName(it.tool) : '🔧 ' + [it.server, it.tool, it.namespace].filter(Boolean).join(' · ');
+    const args = it.arguments && typeof it.arguments === 'object' && Object.keys(it.arguments).length ? JSON.stringify(it.arguments, null, 1) : '';
+    const res = it.result || {};
+    const texts = (res.content || []).filter((c) => c && c.type === 'text').map((c) => c.text).join('\n');
+    const imgs = (res.content || []).filter((c) => c && c.type === 'image' && c.data && /^image\/(png|jpe?g|webp|gif)$/.test(c.mimeType || ''));
+    let body = '';
+    if (args) body += '<pre class="cg-tool-args">' + esc(args.slice(0, 4000)) + '</pre>';
+    if (it.error) body += '<pre class="cg-tool-err">' + esc(it.error.message || JSON.stringify(it.error)) + '</pre>';
+    if (texts) body += '<pre>' + esc(texts.slice(0, 12000)) + '</pre>';
+    imgs.forEach((c) => { body += '<img class="cg-tool-img" alt="" src="data:' + esc(c.mimeType) + ';base64,' + esc(c.data) + '">'; });
+    const bad = it.status === 'failed' || (res && res.isError);
+    const el = cardEl(label, bad ? T('cg.st_failed', null, 'failed') : stLabel(it.status), body, imgs.length > 0, it.status === 'inProgress' ? 'run' : bad ? 'err' : 'ok');
+    el.classList.add('cg-tool');
+    return el;
+  }
+
   function approvalEl(key, a) {
     const p = a.params || {};
     const el = document.createElement('div');
     el.className = 'cg-approval';
+    if (a.method === 'tubecli/tool') {
+      el.innerHTML = '<b>⚠ ' + esc(T('cg.ask_tool', null, 'Codex wants to use TubeCLI')) + ': ' + esc(toolName(p.tool || '')) + '</b>'
+        + (p.detail ? '<div class="cmd">' + esc(p.detail) + '</div>' : '')
+        + '<div class="cg-hint">' + esc(T('cg.ask_tool_hint', null, 'Turn on «Don\'t ask» in Settings to let Codex do this without asking.')) + '</div>'
+        + '<div class="acts"><button type="button" class="cg-btn cg-btn-pri cg-btn-sm" data-ap="accept">' + esc(T('cg.allow', null, 'Allow')) + '</button>'
+        + (p.threadId ? '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptForSession">' + esc(T('cg.allow_session', null, 'Allow for this chat')) + '</button>' : '')
+        + '<button type="button" class="cg-btn cg-btn-danger cg-btn-sm" data-ap="decline">' + esc(T('cg.deny', null, 'Deny')) + '</button></div>';
+      bindApproval(el, key);
+      return el;
+    }
     const isFile = /fileChange|applyPatch/.test(a.method);
     const what = isFile ? T('cg.ask_file', null, 'Codex wants to change files') : T('cg.ask_cmd', null, 'Codex wants to run a command');
     el.innerHTML = '<b>⚠ ' + esc(what) + '</b>'
@@ -473,6 +543,10 @@
       + '<div class="acts"><button type="button" class="cg-btn cg-btn-pri cg-btn-sm" data-ap="accept">' + esc(T('cg.allow', null, 'Allow')) + '</button>'
       + '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptForSession">' + esc(T('cg.allow_session', null, 'Allow for this chat')) + '</button>'
       + '<button type="button" class="cg-btn cg-btn-danger cg-btn-sm" data-ap="decline">' + esc(T('cg.deny', null, 'Deny')) + '</button></div>';
+    bindApproval(el, key);
+    return el;
+  }
+  function bindApproval(el, key) {
     el.querySelectorAll('[data-ap]').forEach((b) => {
       b.onclick = async () => {
         el.querySelectorAll('button').forEach((x) => { x.disabled = true; });
@@ -482,7 +556,6 @@
         renderTail();
       };
     });
-    return el;
   }
 
   /* ── cập nhật trực tiếp từ sự kiện ────────────────────────────────────────── */
@@ -540,6 +613,11 @@
     if (m === 'turn/completed' && tid) { delete S.running[tid]; loadThreadsSoon(); if (tid !== S.cur) renderList(); }
     if (m === 'thread/name/updated' && tid) { const t = S.threads.find((x) => x.id === tid); if (t) { t.name = p.threadName || p.name || t.name; renderList(); } }
     if (m === 'account/rateLimits/updated') { refreshStatusSoon(); }
+    if (m === 'windowsSandbox/setupCompleted') {
+      S.winsb = Object.assign({}, S.winsb, { setup: p.success ? 'done' : 'failed', error: p.error || '', status: p.success ? 'ready' : (S.winsb || {}).status });
+      renderWinBar();
+      if (p.success) toast(T('cg.winsb_done', null, 'Windows sandbox is ready'));
+    }
     if (!tid || tid !== S.cur) return;
     if (m === 'turn/started') {
       curTurn((p.turn || {}).id);
@@ -622,7 +700,7 @@
       onEvent(msg.method, msg.params || {});
     } else if (msg.type === 'approval') {
       S.approvals[msg.key] = { key: msg.key, method: msg.method, params: msg.params };
-      if ((msg.params || {}).threadId === S.cur) { renderTail(); stick(true); }
+      if (approvalHere(S.approvals[msg.key])) { renderTail(); stick(true); }
       else toast(T('cg.approval_other', null, 'Another chat is waiting for your approval'));
     } else if (msg.type === 'approval_done') {
       delete S.approvals[msg.key]; renderTail();
@@ -892,6 +970,15 @@
       + sel('sBox', s.sandbox, [['workspace-write', T('cg.sb_ws', null, 'Can edit the working folder only')], ['read-only', T('cg.sb_ro', null, 'Read-only')], ['danger-full-access', T('cg.sb_full', null, 'Full access to the machine (careful)')]])
       + (st.platform === 'windows' ? '<span class="cg-hint">' + esc(T('cg.win_sandbox', null, 'On Windows the sandbox may block commands — choose full access if Codex cannot read files.')) + '</span>' : '') + '</div>'
       + '<div class="cg-field"><label>' + esc(T('cg.default_folder', null, 'Default working folder')) + '</label><input class="cg-input mono" id="sCwd" value="' + esc(s.cwd || '') + '" placeholder="' + esc(st.workspace || '') + '"></div>'
+      + '<div class="cg-field"><span class="cg-field-label">' + esc(T('cg.writable', null, 'Codex can write to')) + '</span>'
+      + '<div class="cg-roots">' + (st.writable_roots || []).map((r) => '<code>' + esc(r) + '</code>').join('') + '</div>'
+      + '<span class="cg-hint">' + esc(T('cg.writable_note', null, 'The same areas TubeCLI lets its AI use. TubeCLI data stays read-only for Codex.')) + '</span></div>'
+      + '<hr style="border:0;border-top:1px solid var(--border-subtle);width:100%">'
+      + '<div class="cg-field"><span class="cg-field-label">' + esc(T('cg.tools_title', null, 'TubeCLI tools')) + '</span>'
+      + '<label class="cg-check"><input type="checkbox" id="sTools"' + (s.tools !== false ? ' checked' : '') + '> ' + esc(T('cg.tools_on', null, 'Let Codex use TubeCLI (Task Board, browser, extensions…)')) + '</label></div>'
+      + '<div class="cg-field"><label>' + esc(T('cg.tools_ask_label', null, 'When Codex wants to change something in TubeCLI')) + '</label>'
+      + sel('sToolsAuto', s.tools_auto ? 'auto' : 'ask', [['ask', T('cg.tools_ask', null, 'Ask me first (recommended)')], ['auto', T('cg.tools_auto', null, "Just do it — don't ask")]])
+      + '<span class="cg-hint" id="sAutoWarn"' + (s.tools_auto ? '' : ' hidden') + '>' + esc(T('cg.tools_auto_warn', null, 'Codex will open browsers, create tasks and call TubeCLI without asking. A web page it reads could try to trick it.')) + '</span></div>'
       + '<button type="button" class="cg-btn cg-btn-pri" id="sSave">' + esc(T('cg.save', null, 'Save')) + '</button>'
       + '<hr style="border:0;border-top:1px solid var(--border-subtle);width:100%">'
       + '<div class="cg-field"><span class="cg-field-label">Codex CLI</span><div class="cg-row"><span>' + esc(st.version ? 'v' + st.version : '—') + ' · ' + esc(st.source === 'private' ? T('cg.src_private', null, 'TubeCLI copy') : st.source === 'global' ? T('cg.src_global', null, 'system copy') : st.source || '') + '</span>'
@@ -901,10 +988,12 @@
       + '</div>');
     $('sSave').onclick = async () => {
       try {
-        await api('/settings', { method: 'PUT', body: { approval: $('sAppr').value, sandbox: $('sBox').value, cwd: $('sCwd').value.trim() } });
+        await api('/settings', { method: 'PUT', body: { approval: $('sAppr').value, sandbox: $('sBox').value, cwd: $('sCwd').value.trim(),
+          tools: $('sTools').checked, tools_auto: $('sToolsAuto').value === 'auto' } });
         toast(T('cg.saved', null, 'Saved')); await refreshStatus(); closePanel(); renderHead();
       } catch (e) { toast(errText(e), 5000); }
     };
+    $('sToolsAuto').onchange = () => { $('sAutoWarn').hidden = $('sToolsAuto').value !== 'auto'; };
     $('sUpd').onclick = async () => { try { await api('/install', { method: 'POST' }); } catch (e) { toast(errText(e)); } await refreshStatus(); openSettings(); };
     void p;
   }
