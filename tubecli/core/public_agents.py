@@ -407,6 +407,52 @@ def pod_template_cards(names: List[str]) -> List[Dict[str, Any]]:
     return out
 
 
+# ── CHUẨN của Town (user 3/10/2026: «town trên cloud cũng có chuẩn chứ không phải ưng đưa agent kiểu nào cũng được») ─
+# Cloud mới trả GET /api/town/rules (lib/publicAgents.townRules: skill nào được, chat hay thuê, đứng ở nhà nào, các
+# trần). Công cụ town_agent_offer của Codex GPT kiểm theo bản ĐANG CHẠY trên cloud; cloud cũ/mất mạng → bản trong lõi
+# (cùng hằng số mà normalise() và cloud đều kẹp).
+TOWN_RULES_TTL = 3600
+_rules_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def local_town_rules() -> Dict[str, Any]:
+    dflt, lo, hi = BROWSER_MINUTES
+    return {
+        "source": "local", "version": 1,
+        "skills": [{"id": s.id, "kind": "chat", "house": s.extension} for s in PUBLIC_SKILLS.values()]
+                  + [{"id": "content.video", "kind": "hire", "house": "con_st"},
+                     {"id": "pod.video", "kind": "hire", "house": "pod_studio"}],
+        "agent": {"name_min": 2, "name_max": 32, "bio_max": 160, "per_machine_max": 20, "daily_cap": [1, MAX_DAILY_CAP],
+                  "visibility": list(VISIBILITIES), "online_window_sec": 300},
+        "hire": {"price_max": HIRE_PRICE_MAX, "units": list(HIRE_UNITS), "minutes_max": HIRE_MINUTES_MAX,
+                 "presets_max": HIRE_PRESETS_MAX, "presets_need_market_code": True},
+        "pod": {"price_max": HIRE_PRICE_MAX, "unit": "clip", "clips_max": HIRE_POD_CLIPS_MAX,
+                "templates_max": HIRE_POD_TEMPLATES_MAX, "models_max": 3, "products_max": 2, "ai_label": True},
+        "browser": {"price_max": BROWSER_PRICE_MAX, "unit": "minute", "minutes": [lo, hi]},
+    }
+
+
+def town_rules(force: bool = False) -> Dict[str, Any]:
+    """Chuẩn Town đang chạy trên cloud (đệm 1 giờ) — hỏng thì bản trong lõi. Khoá `source` = "cloud" | "local"."""
+    now = time.time()
+    if not force and _rules_cache["data"] and now - _rules_cache["at"] < TOWN_RULES_TTL:
+        return _rules_cache["data"]
+    data = None
+    try:
+        import urllib.request
+        from tubecli.core.town_telemetry import CLOUD_URL
+        req = urllib.request.Request(CLOUD_URL + "/api/town/rules", headers={"User-Agent": "TubeCLI-Town/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as res:
+            got = json.loads(res.read().decode("utf-8", "replace"))
+        if isinstance(got, dict) and got.get("ok") and isinstance(got.get("skills"), list):
+            data = {**got, "source": "cloud"}
+    except Exception as e:      # noqa: BLE001 — cloud cũ (404) / mất mạng: dùng bản trong lõi
+        logger.debug("town rules: %s", e)
+    data = data or local_town_rules()
+    _rules_cache.update(at=now, data=data)
+    return data
+
+
 def _market_links() -> Dict[str, str]:
     """{tên mẫu: mã Chợ} — Content Studio ghi khi «Bán trên Chợ» (market_links.json)."""
     try:

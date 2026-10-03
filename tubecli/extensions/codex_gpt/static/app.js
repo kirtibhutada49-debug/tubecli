@@ -527,9 +527,12 @@
     if (a.method === 'tubecli/tool') {
       el.innerHTML = '<b>⚠ ' + esc(T('cg.ask_tool', null, 'Codex wants to use TubeCLI')) + ': ' + esc(toolName(p.tool || '')) + '</b>'
         + (p.detail ? '<div class="cmd">' + esc(p.detail) + '</div>' : '')
-        + '<div class="cg-hint">' + esc(T('cg.ask_tool_hint', null, 'Turn on «Don\'t ask» in Settings to let Codex do this without asking.')) + '</div>'
+        // once = công cụ LUÔN hỏi (đưa agent lên Agent Town): không có «Cho phép trong phiên này», gợi ý «Không cần hỏi» sai ở đây
+        + '<div class="cg-hint">' + esc(p.once
+          ? T('cg.ask_once_hint', null, 'Codex always asks you before this — it puts an agent in front of strangers and sets prices.')
+          : T('cg.ask_tool_hint', null, 'Turn on «Don\'t ask» in Settings to let Codex do this without asking.')) + '</div>'
         + '<div class="acts"><button type="button" class="cg-btn cg-btn-pri cg-btn-sm" data-ap="accept">' + esc(T('cg.allow', null, 'Allow')) + '</button>'
-        + (p.threadId ? '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptForSession">' + esc(T('cg.allow_session', null, 'Allow for this chat')) + '</button>' : '')
+        + (p.threadId && !p.once ? '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptForSession">' + esc(T('cg.allow_session', null, 'Allow for this chat')) + '</button>' : '')
         + '<button type="button" class="cg-btn cg-btn-danger cg-btn-sm" data-ap="decline">' + esc(T('cg.deny', null, 'Deny')) + '</button></div>';
       bindApproval(el, key);
       return el;

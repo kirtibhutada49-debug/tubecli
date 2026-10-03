@@ -237,8 +237,8 @@ async def main():
 
     # ── H. danh sách + chặn cứng + GET ───────────────────────────────────────
     names = [t["name"] for t in TL.list_tools()]
-    check("H1 tools/list đủ 17 công cụ, mỗi cái có inputSchema + readOnlyHint",
-          len(names) == 17 and all(t["inputSchema"]["type"] == "object" and "readOnlyHint" in t["annotations"] for t in TL.list_tools()), names)
+    check("H1 tools/list đủ 18 công cụ, mỗi cái có inputSchema + readOnlyHint",
+          len(names) == 18 and all(t["inputSchema"]["type"] == "object" and "readOnlyHint" in t["annotations"] for t in TL.list_tools()), names)
     blocked = [("GET", "/api/v1/codex-gpt/accounts"), ("GET", "/api/v1/keychain/items"), ("GET", "/api/v1/auth/status"),
                ("POST", "/api/v1/terminal/run"), ("GET", "/api/v1/file-manager/list"), ("GET", "/api/v1/browser/profiles/main/cookies"),
                ("GET", "/api/v1/capcut-tts/accounts"), ("GET", "/api/v1/demo/../codex-gpt/status"), ("GET", "/api/v1/demo/%2e%2e/keychain"),
@@ -451,7 +451,7 @@ async def main():
                      headers={"x-codex-gpt-key": svc.mcp_key(), "x-forwarded-for": "8.8.8.8"})
         check("K8 loopback qua proxy/tunnel (X-Forwarded-For) → 403", rr.status_code == 403, rr.status_code)
         rr = tc.post("/api/v1/codex-gpt/mcp", json={"method": "tools/list"}, headers={"x-codex-gpt-key": svc.mcp_key()})
-        check("K9 loopback + đúng khoá → danh sách công cụ", rr.status_code == 200 and len(rr.json()["result"]["tools"]) == 17,
+        check("K9 loopback + đúng khoá → danh sách công cụ", rr.status_code == 200 and len(rr.json()["result"]["tools"]) == 18,
               rr.status_code)
 
     # ── L. phiên + sandbox Windows (app-server giả) ──────────────────────────
@@ -503,11 +503,177 @@ async def main():
     except GptError as e:
         code = e.code
     check("L10 chế độ cài lạ → bad_setting", code == "bad_setting")
+    await town_tests()
     await svc._stop_bridge()
 
 
 async def _ok(tid):
     return True, "", tid
+
+
+# ── M. town_agent_offer: chuẩn Town + thẻ chủ duyệt LUÔN hiện (user 3/10/2026) ─────────────────────────────────────────
+class FakeAgent:
+    def __init__(self, aid, name):
+        self.id, self.name = aid, name
+
+
+async def town_tests():
+    import urllib.request
+    from tubecli.core import agent as AG
+    from tubecli.core import muse as MU
+    from tubecli.core import public_agents as pa
+    from tubecli.core import templates as TT
+    from tubecli.extensions.browser import profile_manager as PM
+
+    # M0. chuẩn Town: cloud trả /api/town/rules → dùng; cloud cũ (404) / mất mạng → bản trong lõi. KHÔNG gọi mạng thật.
+    real_open = urllib.request.urlopen
+    URLS = []
+
+    class _Res:
+        def __init__(self, b):
+            self.b = b
+
+        def read(self):
+            return self.b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _down(req, timeout=0):
+        URLS.append(getattr(req, "full_url", req))
+        raise OSError("offline")
+    urllib.request.urlopen = _down
+    try:
+        r0 = pa.town_rules(force=True)
+        check("M0a cloud không trả lời → chuẩn trong lõi (source=local), có pod.video + browser.remote, gọi đúng /api/town/rules",
+              r0["source"] == "local" and {"pod.video", "browser.remote"} <= {s["id"] for s in r0["skills"]}
+              and URLS and str(URLS[0]).endswith("/api/town/rules"), (r0.get("source"), URLS))
+        cloud = {"ok": True, "version": 1, "skills": [{"id": "capcut.tts", "kind": "chat", "house": "capcut_tts"}],
+                 "agent": {"bio_max": 100}}
+        urllib.request.urlopen = lambda req, timeout=0: _Res(json.dumps(cloud).encode())
+        r1 = pa.town_rules(force=True)
+        check("M0b cloud trả chuẩn → dùng bản cloud (source=cloud)", r1["source"] == "cloud" and r1["agent"]["bio_max"] == 100, r1)
+        urllib.request.urlopen = _down
+        check("M0c đệm 1 giờ: lần sau không hỏi lại cloud", pa.town_rules()["source"] == "cloud")
+    finally:
+        urllib.request.urlopen = real_open
+        pa._rules_cache.update(at=0.0, data=None)
+
+    # đồ giả cho phần còn lại — chuẩn = bản trong lõi
+    saved, created, profiles = [], [], []
+    agents = [FakeAgent("a1", "Shop Bot")]
+    patches = {
+        (pa, "town_rules"): lambda force=False: pa.local_town_rules(),
+        (pa, "cloud_ready"): lambda: True,
+        (pa, "owner_caller"): lambda: "",
+        (pa, "available_skills"): lambda: [{"id": "browser.remote", "extension": "browser", "available": True},
+                                            {"id": "capcut.tts", "extension": "capcut_tts", "available": True},
+                                            {"id": "chess.move", "extension": "ai_arena", "available": False}],
+        (pa, "_profile_names"): lambda: {"main", "shop"} | set(profiles),
+        (pa, "_market_links"): lambda: {"Tpl A": "04.170000"},
+        (pa, "public_entries"): lambda: [],
+        (pa, "get_settings"): lambda aid: {},
+        (pa, "set_settings"): lambda aid, raw, name="": (saved.append((aid, raw)), pa.normalise(raw, name))[1],
+        (AG.agent_manager, "get_all"): lambda: list(agents),
+        (AG.agent_manager, "create"): lambda **kw: (created.append(kw), agents.append(FakeAgent("a2", kw["name"])), agents[-1])[2],
+        (MU, "settings"): lambda: {"profile": "muse_prof"},
+        (TT, "list_templates"): lambda: [{"name": "Cô gái tóc xanh 3D", "sections": {"ref_video": {}}},
+                                          {"name": "Chỉ Studio", "sections": {"wizard": {}}}],
+        (PM, "create_profile"): lambda name, tags=None, **kw: (profiles.append(name), {"name": name})[1],
+    }
+    old = {k: getattr(*k) for k in patches}
+    for (obj, attr), fn in patches.items():
+        setattr(obj, attr, fn)
+    try:
+        r = await call("tubecli_doc", {"name": "town"})
+        check("M1 tubecli_doc('town') → hướng dẫn Town (hỏi chủ giá, hồ sơ trình duyệt mới, from-task)",
+              "Agent Town" in txt(r) and "PER MINUTE" in txt(r) and "from-task" in txt(r) and "new" in txt(r), txt(r)[:200])
+        bad = [
+            ("M2 skill Town không nhận", {"agent": "Shop Bot", "skills": ["web.crawl"]}, "not a chat skill"),
+            ("M3 extension của skill chưa bật", {"agent": "Shop Bot", "skills": ["chess.move"]}, "ai_arena"),
+            ("M4 agent không có, không xin tạo", {"agent": "Ghost", "skills": ["capcut.tts"]}, "create_agent"),
+            ("M5 tên công khai sai chuẩn", {"agent": "Shop Bot", "public_name": "x", "skills": ["capcut.tts"]}, "2-32"),
+            ("M6 bio quá dài", {"agent": "Shop Bot", "bio": "b" * 161, "skills": ["capcut.tts"]}, "160"),
+            ("M7 riêng tư khi cloud chưa báo chủ", {"agent": "Shop Bot", "visibility": "private", "skills": ["capcut.tts"]}, "owner"),
+            ("M8 không có gì để mời", {"agent": "Shop Bot"}, "at least one"),
+            ("M9 mẫu Content Studio chưa lên Chợ", {"agent": "Shop Bot", "hire_video": {"templates": ["Tpl B"]}}, "Market"),
+            ("M10 mẫu Pod không có (mẫu chỉ của Studio không tính)",
+             {"agent": "Shop Bot", "hire_ad": {"templates": ["Chỉ Studio"]}}, "Cô gái tóc xanh 3D"),
+            ("M11 hồ sơ trình duyệt không có", {"agent": "Shop Bot", "skills": ["browser.remote"], "browser_profile": "nope"}, "does not exist"),
+        ]
+        wrong = []
+        for name, args, needle in bad:
+            r = await call("town_agent_offer", args)          # deny_all: hỏi chủ = hỏng test
+            if not r["isError"] or needle not in txt(r):
+                wrong.append((name, txt(r)[:160]))
+        check("M2-M11 sai chuẩn Town / thiếu điều kiện máy → lỗi rõ cho Codex, KHÔNG hiện thẻ, KHÔNG lưu", not wrong and not saved, wrong)
+        MU.settings = lambda: {}
+        r = await call("town_agent_offer", {"agent": "Shop Bot", "hire_ad": {"templates": ["Cô gái tóc xanh 3D"]}})
+        check("M12 video quảng cáo mà chưa cài Muse → lỗi chỉ chỗ cài", r["isError"] and "Muse" in txt(r), txt(r))
+        MU.settings = patches[(MU, "settings")]
+
+        # M13+. thẻ chủ duyệt: «Không cần hỏi» + «Cho phép trong phiên này» vẫn hỏi, thẻ once
+        svc.update_settings({"tools_auto": True})
+        svc.tool_session_ok.add("th9")
+        svc.tool_items.clear()
+        q = svc.subscribe()
+        args = {"agent": "Thuê Trình Duyệt", "create_agent": True, "public_name": "Thue Browser", "bio": "Rent a clean browser",
+                "skills": ["browser.remote"], "browser_price_per_minute": 20, "browser_minutes": 30,
+                "hire_ad": {"templates": ["cô gái tóc xanh 3d"], "price_per_clip": 0, "clips_max": 6}}
+        await svc._on_notify("item/started", {"threadId": "th9", "turnId": "u9", "item": {
+            "type": "mcpToolCall", "id": "i9", "server": "tubecli", "tool": "town_agent_offer", "arguments": args}})
+        task = asyncio.ensure_future(TL.call_tool("town_agent_offer", args, APP, svc.tool_approval))
+        pend = await wait_for(lambda: [a for a in svc.pending_approvals() if a["method"] == "tubecli/tool"])
+        p0 = (pend or [{}])[0].get("params") or {}
+        check("M13 «Không cần hỏi» + đã «cho cả phiên» mà công cụ này VẪN hiện thẻ, thẻ once (không nút cho cả phiên)",
+              pend and p0.get("once") is True and p0.get("threadId") == "th9" and p0.get("tool") == "town_agent_offer", pend)
+        d = p0.get("detail") or ""
+        check("M14 thẻ kê đủ: agent MỚI, MỌI NGƯỜI thấy, 20/phút, 30 phút, hồ sơ MỚI trống, quảng cáo miễn phí, nhà trên Town",
+              "Thuê Trình Duyệt" in d and "20" in d and "30" in d and "town_thue_browser" in d
+              and "Cô gái tóc xanh 3D" in d and "pod_studio" in d and "browser" in d, d)
+        await svc.answer_approval(pend[0]["key"], "decline")
+        r = await asyncio.wait_for(task, 5)
+        check("M15 chủ từ chối → KHÔNG tạo agent, KHÔNG tạo hồ sơ, KHÔNG lưu", r["isError"] and not saved and not created and not profiles, txt(r))
+        svc.tool_session_ok.discard("th9")
+        await svc._on_notify("item/started", {"threadId": "th9", "turnId": "u9", "item": {
+            "type": "mcpToolCall", "id": "i10", "server": "tubecli", "tool": "town_agent_offer", "arguments": args}})
+        task = asyncio.ensure_future(TL.call_tool("town_agent_offer", args, APP, svc.tool_approval))
+        pend = await wait_for(lambda: [a for a in svc.pending_approvals() if a["method"] == "tubecli/tool"])
+        await svc.answer_approval(pend[0]["key"], "acceptForSession")
+        r = await asyncio.wait_for(task, 5)
+        raw = saved[0][1] if saved else {}
+        check("M16 chủ duyệt → tạo agent + hồ sơ trình duyệt MỚI (thẻ town/rental) + lưu đúng giá/trần/mẫu",
+              not r["isError"] and created and created[0]["name"] == "Thuê Trình Duyệt" and profiles == ["town_thue_browser"]
+              and saved and saved[0][0] == "a2" and raw["browser_profile"] == "town_thue_browser" and raw["browser_price"] == 20
+              and raw["browser_minutes"] == 30 and raw["browser_upload"] == "off" and raw["hire_pod_on"] is True
+              and raw["hire_pod_templates"] == ["Cô gái tóc xanh 3D"] and raw["hire_pod_price"] == 0, (txt(r), raw, created, profiles))
+        check("M17 «cho cả phiên» ở thẻ once chỉ tính LẦN NÀY (phiên KHÔNG được mở khoá)",
+              pend and pend[0]["params"].get("threadId") == "th9" and "th9" not in svc.tool_session_ok and len(saved) == 1,
+              (pend, svc.tool_session_ok))
+        saved.clear()
+        r = await call("town_agent_offer", {"agent": "Shop Bot", "skills": ["browser.remote"], "browser_profile": "main",
+                                            "browser_price_per_minute": 99999},
+                       approve=lambda *a, **kw: _capture(a, kw))
+        d = CAPTURED[-1][0][1] if CAPTURED else ""
+        check("M18 hồ sơ CÓ SẴN → thẻ cảnh báo người thuê dùng được mọi tài khoản; giá kẹp về trần 5000/phút; approve nhận force",
+              not r["isError"] and "⚠" in d and CAPTURED[-1][1] == {"force": True} and saved and saved[0][1]["browser_price"] == 5000, (d, saved))
+        svc.unsubscribe(q)
+    finally:
+        for (obj, attr), fn in old.items():
+            setattr(obj, attr, fn)
+        svc.update_settings({"tools_auto": False})
+        svc.tool_session_ok.discard("th9")
+
+
+CAPTURED = []
+
+
+async def _capture(a, kw):
+    CAPTURED.append((a, kw))
+    return True, "", None
 
 
 if __name__ == "__main__":

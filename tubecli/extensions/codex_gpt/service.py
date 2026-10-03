@@ -314,16 +314,20 @@ class CodexGptService:
             best = best or it["thread"]
         return best
 
-    async def tool_approval(self, tool: str, detail: str, args: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
-        """(được, lý do cho Codex, phiên). Hỏi bằng thẻ duyệt trong khung chat của phiên gọi."""
+    async def tool_approval(self, tool: str, detail: str, args: Dict[str, Any],
+                            force: bool = False) -> Tuple[bool, str, Optional[str]]:
+        """(được, lý do cho Codex, phiên). Hỏi bằng thẻ duyệt trong khung chat của phiên gọi.
+
+        force = công cụ LUÔN hỏi (town_agent_offer — đưa agent ra cho người lạ, đặt giá): bỏ qua cả «Không cần hỏi»
+        lẫn «Cho phép trong phiên này»; thẻ mang once=True (không có nút cho cả phiên)."""
         tid = self._thread_for_tool(tool, args)
-        if self.state()["settings"].get("tools_auto") or (tid and tid in self.tool_session_ok):
+        if not force and (self.state()["settings"].get("tools_auto") or (tid and tid in self.tool_session_ok)):
             return True, "", tid
         if not self.subscribers:
             return False, TOOL_NO_VIEWER, tid
         key = f"t{self._gen}-{secrets.token_hex(4)}"
         fut = asyncio.get_running_loop().create_future()
-        params = {"threadId": tid, "tool": tool, "detail": detail[:2000]}
+        params = {"threadId": tid, "tool": tool, "detail": detail[:2000], **({"once": True} if force else {})}
         self.approvals[key] = {"kind": "tool", "method": "tubecli/tool", "params": params, "future": fut, "at": _now()}
         await self.broadcast({"type": "approval", "key": key, "method": "tubecli/tool", "params": params})
         decision = "decline"
@@ -527,6 +531,8 @@ class CodexGptService:
         if a.get("kind") == "tool":
             if decision not in ("accept", "acceptForSession"):
                 decision = "decline"
+            if decision == "acceptForSession" and a["params"].get("once"):
+                decision = "accept"                 # công cụ luôn hỏi: «cho cả phiên» chỉ tính là đồng ý LẦN NÀY
             if decision == "acceptForSession" and a["params"].get("threadId"):
                 self.tool_session_ok.add(a["params"]["threadId"])
             if not a["future"].done():
