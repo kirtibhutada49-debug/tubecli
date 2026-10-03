@@ -263,6 +263,27 @@ def _pod_images(items: Any, limit: int, code: str, tag: str) -> list:
     return out
 
 
+_VOICE_PRESETS = ("bright", "warm", "elegant", "sweet", "pro")      # = VOICE_PRESETS của Pod Studio
+
+
+def _voice_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """voice / voice_gender / voice_custom / voices[] (theo từng ảnh người mẫu) — kẹp giá trị, chỉ giữ cái có."""
+    def one(d: Any) -> Dict[str, str]:
+        d = d if isinstance(d, dict) else {}
+        g = str(d.get("gender") or d.get("voice_gender") or "").strip().lower()
+        v = str(d.get("voice") or "").strip().lower()
+        return {"gender": g if g in ("male", "female") else "", "voice": v if v in _VOICE_PRESETS else "",
+                "voice_custom": " ".join(str(d.get("voice_custom") or "").split())[:200]}
+    top = one(payload)
+    out: Dict[str, Any] = {k: val for k, val in (("voice", top["voice"]), ("voice_gender", top["gender"]),
+                                                  ("voice_custom", top["voice_custom"])) if val}
+    voices = [one(x) for x in (payload.get("voices") or [])[:POD_MAX_MODELS]] if isinstance(payload.get("voices"), list) else []
+    voices = [{k: val for k, val in v.items() if val} for v in voices]
+    if any(voices):
+        out["voices"] = voices
+    return out
+
+
 def _pod_template(name: str) -> Optional[Dict[str, Any]]:
     try:
         from tubecli.core import templates as T
@@ -311,6 +332,8 @@ async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any]
     # Tuỳ biến của khách (Town 3/10/2026): kiểu bối cảnh + kiểu nhân vật — chữ thuần một dòng, ≤300 ký tự mỗi ô
     scene = " ".join(str(payload.get("scene") or "").split())[:300]
     character = " ".join(str(payload.get("character") or "").split())[:300]
+    # Giọng khách chọn (3/10/2026 tối): kiểu giọng, giới, mô tả — chung cả đơn + theo từng ảnh người mẫu (voices[])
+    voice = _voice_fields(payload)
     async with _lock:
         if code in _jobs:            # cloud gọi lại (mạng chớp) — không mở việc thứ hai
             return {"ok": True, "job": code}
@@ -320,6 +343,7 @@ async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any]
                "unit": "clip", "clips": clips, "price": int(payload.get("price") or 0),
                "models": models, "products": products, "consent": bool(raw_models),
                "ratio": ratio if ratio in ("9:16", "16:9", "1:1") else "", "scene": scene, "character": character,
+               **voice,
                "status": "accepted", "task_id": "", "files": [], "paths": [], "seconds": 0, "at": time.time()}
         _jobs[code] = job
         _save(job)
@@ -433,6 +457,9 @@ async def _run_pod(code: str) -> None:
             body["scene_custom"] = job["scene"]
         if job.get("character"):
             body["character_custom"] = job["character"]
+        for k in ("voice", "voice_gender", "voice_custom", "voices"):
+            if job.get(k):
+                body[k] = job[k]
         try:
             out = await asyncio.to_thread(_http_post_json, "/api/v1/pod_studio/ref-video/run", body)
         except Exception as e:      # noqa: BLE001 — Pod Studio tắt / mẫu mất / thiếu ảnh
