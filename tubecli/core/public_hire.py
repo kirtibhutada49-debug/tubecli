@@ -308,6 +308,9 @@ async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any]
     if not raw_models and not own:
         raise PublicSkillError("need_model", status=422)
     ratio = str(payload.get("ratio") or "")
+    # Tuỳ biến của khách (Town 3/10/2026): kiểu bối cảnh + kiểu nhân vật — chữ thuần một dòng, ≤300 ký tự mỗi ô
+    scene = " ".join(str(payload.get("scene") or "").split())[:300]
+    character = " ".join(str(payload.get("character") or "").split())[:300]
     async with _lock:
         if code in _jobs:            # cloud gọi lại (mạng chớp) — không mở việc thứ hai
             return {"ok": True, "job": code}
@@ -316,7 +319,7 @@ async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any]
         job = {"code": code, "kind": "pod", "agent_id": entry["agent_id"], "preset": tpl, "brief": brief,
                "unit": "clip", "clips": clips, "price": int(payload.get("price") or 0),
                "models": models, "products": products, "consent": bool(raw_models),
-               "ratio": ratio if ratio in ("9:16", "16:9", "1:1") else "",
+               "ratio": ratio if ratio in ("9:16", "16:9", "1:1") else "", "scene": scene, "character": character,
                "status": "accepted", "task_id": "", "files": [], "paths": [], "seconds": 0, "at": time.time()}
         _jobs[code] = job
         _save(job)
@@ -412,8 +415,8 @@ def pod_failure(error: str) -> tuple:
 
 
 async def _run_pod(code: str) -> None:
-    """Việc «video quảng cáo từ ảnh»: xếp task «Video từ ảnh tham chiếu» của Pod Studio lên Bảng việc của chủ (nhãn AI
-    BẬT CỨNG, origin mang mã việc), bám tiến độ, giao video đã ghép. Cấu trúc như _run của content_video."""
+    """Việc «video quảng cáo từ ảnh»: xếp task «Video từ ảnh tham chiếu» của Pod Studio lên Bảng việc của chủ (origin mang
+    mã việc; KHÔNG đóng nhãn AI — chủ dự án bỏ 3/10/2026), bám tiến độ, giao video đã ghép. Cấu trúc như _run của content_video."""
     job = _jobs[code]
     await _report(job, "running", "queued", 2)
     if job["status"] == "closed":
@@ -422,9 +425,14 @@ async def _run_pod(code: str) -> None:
     if not tid:
         body = {"model_images": job.get("models") or [], "product_images": job.get("products") or [],
                 "request": job["brief"], "template": job["preset"], "clips": job["clips"],
-                "watermark": True, "hire": code, "created_by": "hire", "title": f"Việc thuê Town {code}"}
+                "hire": code, "created_by": "hire", "title": f"Việc thuê Town {code}"}
         if job.get("ratio"):
             body["aspect"] = job["ratio"]
+        # Tuỳ biến của khách: chỉ gửi khi có — trống thì Pod lấy theo mẫu (_apply_template)
+        if job.get("scene"):
+            body["scene_custom"] = job["scene"]
+        if job.get("character"):
+            body["character_custom"] = job["character"]
         try:
             out = await asyncio.to_thread(_http_post_json, "/api/v1/pod_studio/ref-video/run", body)
         except Exception as e:      # noqa: BLE001 — Pod Studio tắt / mẫu mất / thiếu ảnh

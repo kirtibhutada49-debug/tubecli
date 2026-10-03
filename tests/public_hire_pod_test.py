@@ -132,6 +132,10 @@ check("ảnh người mẫu KHÔNG kèm cam kết → need_consent", rc(withm) =
 check("ảnh người mẫu + cam kết → nhận, lưu ảnh người mẫu",
       rc({**withm, "consent": True}) == {"ok": True, "job": "pod222222222"} and ph._jobs["pod222222222"]["consent"] is True
       and ph._jobs["pod222222222"]["models"][0].endswith(".png"))
+look = {**base, "job": "podl00000000", "scene": "  rainy   neon\nTokyo ", "character": "x" * 400}
+check("tuỳ biến bối cảnh + nhân vật (3/10/2026): gọn dấu cách, cắt 300 ký tự; không gửi → rỗng",
+      rc(look) == {"ok": True, "job": "podl00000000"} and ph._jobs["podl00000000"]["scene"] == "rainy neon Tokyo"
+      and len(ph._jobs["podl00000000"]["character"]) == 300 and j["scene"] == "" and j["character"] == "")
 check("quá trần clip của chủ → bad_clips", rc({**base, "job": "pod333333333", "clips": 7}) == "bad_clips")
 check("0 clip → bad_clips", rc({**base, "job": "pod333333334", "clips": 0}) == "bad_clips")
 check("mẫu agent không phục vụ → template_missing", rc({**base, "job": "pod444444444", "preset": "Edo"}) == "template_missing")
@@ -195,12 +199,15 @@ async def run_fast(code):
 
 
 reports.clear()
+ph._jobs["pod111111111"].update(scene="rainy neon Tokyo", character="silver hair")
 job = asyncio.run(run_fast("pod111111111"))
 path, body = posted[0]
-check("xếp task Pod: route run, nhãn AI BẬT CỨNG, origin mã việc, mẫu + số clip + ảnh sản phẩm, người mẫu để mẫu lo",
-      path == "/api/v1/pod_studio/ref-video/run" and body["watermark"] is True and body["hire"] == "pod111111111"
+check("xếp task Pod: route run, KHÔNG nhãn AI (chủ dự án bỏ 3/10/2026), origin mã việc, mẫu + số clip + ảnh sản phẩm, người mẫu để mẫu lo",
+      path == "/api/v1/pod_studio/ref-video/run" and not body.get("watermark") and body["hire"] == "pod111111111"
       and body["template"] == "Tóc xanh 3D" and body["clips"] == 3 and body["model_images"] == []
       and body["product_images"] == j["products"] and body["created_by"] == "hire", body)
+check("tuỳ biến của khách xuống Pod là scene_custom / character_custom",
+      body["scene_custom"] == "rainy neon Tokyo" and body["character_custom"] == "silver hair", body)
 ready = [r for r in reports if r["status"] == "ready"]
 check("giao: báo ready kèm file + 30 s; sổ việc giữ đường dẫn video",
       ready and ready[0]["seconds"] == 30 and ready[0]["files"][0]["name"] == "video-quang-cao-pod111111111.mp4"
@@ -213,6 +220,8 @@ reports.clear()
 asyncio.run(run_fast("pod222222222"))
 check("task Pod hỏng → báo failed (cloud hoàn tiền)", any(r["status"] == "failed" for r in reports)
       and ph._jobs["pod222222222"]["status"] == "failed")
+check("không tuỳ biến → thân không mang khoá scene_custom / character_custom",
+      "scene_custom" not in posted[-1][1] and "character_custom" not in posted[-1][1], posted[-1][1])
 # Muse trả CHỮ thay cho ảnh (việc thuê #164, 3/10/2026) → mã image_refused + lời AI cho khách, đã lột đường dẫn/link
 refusal = ("MuseError: Muse did not draw an image: I couldn't generate that image. If you'd like, I can do Cut 1 in the "
            r"elegant long áo dài instead (C:\tubecreate-vue\tubecli\data\x.jpg, https://muse.ai/c/1) — just say go.")
