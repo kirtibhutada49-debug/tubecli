@@ -233,9 +233,11 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
     except (TypeError, ValueError):
         cap = DEFAULT_DAILY_CAP
     enabled = bool(raw.get("enabled"))
-    # Agent «chỉ cho thuê» hợp lệ: không skill chat nào nhưng bật nhận việc + có mẫu.
+    # Agent «chỉ cho thuê» hợp lệ: không skill chat nào nhưng bật nhận việc + có mẫu (video từ mẫu Content Studio
+    # HOẶC video quảng cáo từ ảnh của Pod Studio).
     _hire_on_now = raw.get("hire_on") if "hire_on" in raw else (old or {}).get("hire_on")
-    if enabled and not skills and not _hire_on_now:
+    _pod_on_now = raw.get("hire_pod_on") if "hire_pod_on" in raw else (old or {}).get("hire_pod_on")
+    if enabled and not skills and not _hire_on_now and not _pod_on_now:
         raise ValueError("no_skills")
     # Không gửi trường → giữ nguyên thứ đang lưu (mặc định cho agent mới là công khai).
     # Gửi chữ lạ → công khai, KHÔNG đoán là riêng tư: đoán sai kiểu đó làm agent đang
@@ -264,6 +266,7 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
         out[k] = max(lo, min(hi, v))
     out.update(_browser_settings(raw, old or {}))
     out.update(_hire_settings(raw, old or {}))
+    out.update(_hire_pod_settings(raw, old or {}))
     if enabled and "browser.remote" in skills and not out["browser_profile"]:
         raise ValueError("no_browser_profile")
     return out
@@ -344,6 +347,64 @@ def _hire_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
             "hire_unit": unit if unit in HIRE_UNITS else "job",
             "hire_minutes_max": max(1, min(HIRE_MINUTES_MAX, mmax)),
             "hire_presets": presets}
+
+
+# Thuê làm VIDEO QUẢNG CÁO TỪ ẢNH (Pod Studio «Video từ ảnh tham chiếu», user 3/10/2026): khách gửi ảnh sản phẩm
+# (+ ảnh người mẫu nếu chủ cho), yêu cầu + thoại; tính THEO CLIP 10 s. Mẫu = mẫu ở kho mẫu chung của lõi (phần ref_video).
+HIRE_POD_CLIPS_MAX = 12          # = MAX_CLIPS của pipe Pod + POD_CLIPS_MAX của cloud (lib/hire.js)
+HIRE_POD_TEMPLATES_MAX = 30      # = POD_TEMPLATES_MAX của cloud
+
+
+def _hire_pod_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
+    """Cài đặt NHẬN VIỆC «video quảng cáo từ ảnh». Trường không gửi → giữ bản đang lưu.
+    hire_pod_price = xu MỖI CLIP 10 s; hire_pod_models = cho khách gửi ảnh NGƯỜI MẪU của họ (user chốt CHO, kèm cam
+    kết quyền dùng ảnh + nhãn AI trên video); hire_pod_templates = TÊN mẫu (kho mẫu chung) agent phục vụ."""
+    on = bool(raw.get("hire_pod_on")) if "hire_pod_on" in raw else bool(old.get("hire_pod_on"))
+
+    def num(key: str, dflt: int) -> int:
+        try:
+            return int(raw.get(key) if raw.get(key) not in (None, "") else old.get(key) if old.get(key) not in (None, "") else dflt)
+        except (TypeError, ValueError):
+            return dflt
+    models = bool(raw.get("hire_pod_models")) if "hire_pod_models" in raw else bool(old.get("hire_pod_models", True))
+    if "hire_pod_templates" in raw:
+        names, seen = [], set()
+        for p in (raw.get("hire_pod_templates") or [])[:HIRE_POD_TEMPLATES_MAX]:
+            name = _clean_text(p, 60)
+            if name and name.casefold() not in seen:
+                seen.add(name.casefold())
+                names.append(name)
+    else:
+        names = [str(x) for x in (old.get("hire_pod_templates") or [])][:HIRE_POD_TEMPLATES_MAX]
+    if ("hire_pod_on" in raw and on) and not names:
+        raise ValueError("no_hire_pod_templates")
+    return {"hire_pod_on": on, "hire_pod_price": max(0, min(HIRE_PRICE_MAX, num("hire_pod_price", 0))),
+            "hire_pod_clips_max": max(1, min(HIRE_POD_CLIPS_MAX, num("hire_pod_clips_max", 6))),
+            "hire_pod_models": models, "hire_pod_templates": names}
+
+
+def pod_template_cards(names: List[str]) -> List[Dict[str, Any]]:
+    """Mẫu Pod agent phục vụ → thẻ gọn đẩy lên Town: {n tên, s kiểu hình, r khung hình, k số clip, f thể loại,
+    m có người mẫu mặc định}. Mẫu không còn trong kho chung thì bỏ (chủ xoá mẫu mà quên gỡ khỏi danh sách)."""
+    try:
+        from tubecli.core import templates as T
+    except ImportError:
+        return []
+    out = []
+    for n in names or []:
+        t = T.get_template(n)
+        if not t:
+            continue
+        v = T.section_view(t, "ref_video")
+        own = [p for p in (v.get("model_images") or []) if isinstance(p, str) and os.path.isfile(p)]
+        try:
+            clips = max(1, min(HIRE_POD_CLIPS_MAX, int(v.get("clips") or 3)))
+        except (TypeError, ValueError):
+            clips = 3
+        out.append({"n": str(t.get("name"))[:60], "s": str(v.get("style") or "auto")[:12],
+                    "r": str(v.get("aspect") or "9:16")[:6], "k": clips, "f": str(v.get("format") or "ad")[:8],
+                    "m": bool(own)})
+    return out
 
 
 def _market_links() -> Dict[str, str]:
@@ -443,7 +504,8 @@ def public_entries() -> List[Dict[str, Any]]:
         if aid not in alive or not isinstance(st, dict) or not st.get("enabled"):
             continue
         skills = [s for s in st.get("skills") or [] if s in PUBLIC_SKILLS]
-        if not skills and not (st.get("hire_on") and st.get("hire_presets")):
+        if not skills and not (st.get("hire_on") and st.get("hire_presets")) \
+                and not (st.get("hire_pod_on") and st.get("hire_pod_templates")):
             continue
         out.append({"agent_id": aid, "hash": agent_hash(aid), "settings": {**st, "skills": skills}})
     return out
@@ -499,6 +561,18 @@ def _profile_row(entry: Dict[str, Any], load: Optional[Dict[str, float]] = None)
            "vis": vis if vis in VISIBILITIES else DEFAULT_VISIBILITY}
     if hire is not None:
         row["hire"] = hire
+    # Video quảng cáo từ ảnh (Pod Studio): khối riêng + cờ skill 'pod.video' — như 'content.video', KHÔNG phải skill
+    # chat (invoke từ chối), chỉ để Town bày chip đặt việc. Mẫu nào mất khỏi kho chung thì không lên.
+    if st.get("hire_pod_on") and st.get("hire_pod_templates"):
+        cards = pod_template_cards(st["hire_pod_templates"])
+        if cards:
+            row["hire_pod"] = {"on": True, "price": int(st.get("hire_pod_price") or 0),
+                               "clips_max": int(st.get("hire_pod_clips_max") or 6),
+                               "models": bool(st.get("hire_pod_models", True)), "templates": cards}
+            if "pod.video" not in skills:
+                skills.append("pod.video")
+    elif "hire_pod_on" in st:
+        row["hire_pod"] = {"on": False}
     if "browser.remote" in skills:
         # Giá thuê trình duyệt (xu/phút) + trần phút/phiên: cloud hiện cho khách chọn số phút, GIỮ
         # tiền theo đó rồi chốt theo phút thực. Tên hồ sơ trình duyệt KHÔNG bao giờ rời máy.

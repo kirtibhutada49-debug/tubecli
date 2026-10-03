@@ -60,6 +60,13 @@ class PublicAgentSettings(BaseModel):
     hire_unit: Optional[str] = None
     hire_minutes_max: Optional[int] = None
     hire_presets: Optional[List[str]] = None
+    # Nhận việc VIDEO QUẢNG CÁO TỪ ẢNH (Pod Studio, 3/10/2026): giá xu MỖI CLIP 10 s, trần số clip/việc, cho khách
+    # gửi ảnh người mẫu của họ hay không, TÊN mẫu (kho mẫu chung) phục vụ. None = không gửi = giữ bản đang lưu.
+    hire_pod_on: Optional[bool] = None
+    hire_pod_price: Optional[int] = None
+    hire_pod_clips_max: Optional[int] = None
+    hire_pod_models: Optional[bool] = None
+    hire_pod_templates: Optional[List[str]] = None
 
 
 @router.get("/api/v1/public-agents")
@@ -88,7 +95,20 @@ async def list_public_agents(request: Request):
         "load": public_agents.machine_load(),
         "defaults": {"daily_cap": public_agents.DEFAULT_DAILY_CAP, "max_daily_cap": public_agents.MAX_DAILY_CAP},
         "thresholds": {k: {"default": d, "min": lo, "max": hi} for k, (d, lo, hi) in public_agents.THRESHOLDS.items()},
+        # Mẫu Pod Studio dùng được cho «nhận làm video quảng cáo» (kho mẫu chung, phần ref_video) — Flow bày ô chọn.
+        # Chỉ mẫu đã có phần Pod (ref_video) — 54 mẫu Content Studio thuần không chen vào ô chọn.
+        "pod_templates": public_agents.pod_template_cards(
+            [t.get("name") for t in _shared_templates() if "ref_video" in (t.get("sections") or {})]),
+        "pod_clips_max": public_agents.HIRE_POD_CLIPS_MAX,
     }
+
+
+def _shared_templates() -> list:
+    try:
+        from tubecli.core import templates as T
+        return T.list_templates()
+    except Exception:      # noqa: BLE001
+        return []
 
 
 @router.put("/api/v1/public-agents/{agent_id}")
@@ -171,7 +191,9 @@ async def public_hire_accept(request: Request):
     """CHỈ cloud gọi (chữ ký miền «hire») — nhận một việc thuê từ Chợ mẫu rồi trả lời NGAY;
     video chạy nền bằng dây chuyền content_video, tiến độ máy tự báo về cloud."""
     body = await request.body()
-    if len(body) > 16384:
+    # 16 MB: việc «video quảng cáo từ ảnh» (pod.video) mang ảnh khách gửi (base64, ≤ 5 tấm × 3 MB) — chữ ký HMAC
+    # vẫn kiểm trên TOÀN BỘ thân trước khi đọc nội dung; việc chỉ có chữ thì vẫn nhỏ như cũ.
+    if len(body) > 16 * 1024 * 1024:
         return JSONResponse(status_code=413, content={"ok": False, "code": "too_large"})
     why = public_agents.verify_invoke(
         request.headers.get("x-town-ts"), request.headers.get("x-town-nonce"),

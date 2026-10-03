@@ -39,7 +39,14 @@ _lock = asyncio.Lock()
 
 POLL_SEC = 15
 REPORT_MIN_GAP = 20            # đừng dội cloud: chỉ báo khi ĐỔI bước, tối đa ~3 lượt/phút
+# Báo «còn sống» cả khi bước KHÔNG đổi: việc Pod xếp hàng chờ Muse (mỗi lúc một lượt) có thể đứng một bước hàng chục
+# phút — cloud thấy im 30 phút (SILENT_WINDOW_SEC) là hoàn tiền trong khi task vẫn chạy thành mồ côi.
+HEARTBEAT_SEC = 300
 MAX_BRIEF = 4000
+# Việc «video quảng cáo từ ảnh» (pod.video): ảnh khách gửi đi KÈM lệnh nhận việc (base64, cloud không cất).
+POD_MAX_MODELS, POD_MAX_PRODUCTS = 3, 2
+POD_IMG_MAX = 3 * 1024 * 1024           # mỗi ảnh sau giải mã — trình duyệt đã thu về ≤ 1600 px
+_POD_STEP_PCT = {"intake": 5, "character": 15, "shots": 25, "board": 40, "clips": 60, "render": 90}
 # Bước của content_video → phần trăm cho khách xem (thang thô, đủ để biết còn sống).
 _STEP_PCT = {"capabilities": 5, "script": 15, "studio": 30, "images": 45, "tts": 60,
              "render": 80, "thumbnail": 92, "publish": 95, "drive": 95}
@@ -165,12 +172,14 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
     skill = str(payload.get("skill") or "")
     if not _CODE_RE.match(code) or not h or not brief:
         raise PublicSkillError("bad_request", status=400)
-    if skill != "content.video":
+    if skill not in ("content.video", "pod.video"):
         raise PublicSkillError("skill_unavailable", status=503)
 
     entry = next((e for e in public_agents.public_entries() if e["hash"] == h), None)
     if not entry:
         raise PublicSkillError("agent_not_public", status=404)
+    if skill == "pod.video":
+        return await _receive_pod(payload, code, entry, brief)
     hire = _hire_settings(entry)
     if not hire["on"]:
         raise PublicSkillError("hire_off", status=409)
@@ -210,6 +219,108 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
         _save(job)
         job["_task"] = asyncio.create_task(_run(code))
     logger.info("[hire] nhận việc %s: mẫu «%s», %s phút", code, preset, minutes)
+    return {"ok": True, "job": code}
+
+
+def _pod_images(items: Any, limit: int, code: str, tag: str) -> list:
+    """Ảnh khách gửi (base64) → file trong kho ảnh Pod Studio. Chỉ JPEG/PNG/WEBP mở được bằng PIL, ≤ POD_IMG_MAX;
+    sai một tấm là từ chối CẢ việc (khách biết ngay, chưa mất xu — cloud hoàn khi máy từ chối)."""
+    import base64
+    import io
+
+    from tubecli.config import DATA_DIR
+    if not items:
+        return []
+    if not isinstance(items, list) or len(items) > limit:
+        raise PublicSkillError("bad_images", status=422)
+    gal = os.path.join(str(DATA_DIR), "pod_studio", "gallery")
+    os.makedirs(gal, exist_ok=True)
+    out = []
+    for i, it in enumerate(items, 1):
+        raw_b64 = str((it or {}).get("b64") or "") if isinstance(it, dict) else ""
+        try:
+            data = base64.b64decode(raw_b64, validate=True)
+        except Exception:      # noqa: BLE001
+            raise PublicSkillError("bad_images", status=422)
+        if not data or len(data) > POD_IMG_MAX:
+            raise PublicSkillError("image_too_large" if data else "bad_images", status=422)
+        try:
+            from PIL import Image
+            im = Image.open(io.BytesIO(data))
+            fmt = (im.format or "").upper()
+            im.verify()
+        except Exception:      # noqa: BLE001
+            raise PublicSkillError("bad_images", status=422)
+        ext = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}.get(fmt)
+        if not ext:
+            raise PublicSkillError("bad_images", status=422)
+        p = os.path.join(gal, f"hire_{code}_{tag}{i}.{ext}")
+        with open(p, "wb") as f:
+            f.write(data)
+        out.append(p)
+    return out
+
+
+def _pod_template(name: str) -> Optional[Dict[str, Any]]:
+    try:
+        from tubecli.core import templates as T
+    except ImportError:
+        return None
+    t = T.get_template(name)
+    return T.section_view(t, "ref_video") if t else None
+
+
+async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any], brief: str) -> Dict[str, Any]:
+    """Nhận việc «video quảng cáo từ ảnh» (pod.video): kiểm cài đặt chủ, mẫu, số clip, ảnh; lưu ảnh; chạy nền."""
+    st = entry.get("settings") or {}
+    if not st.get("hire_pod_on"):
+        raise PublicSkillError("hire_off", status=409)
+    tpl = " ".join(str(payload.get("preset") or "").split())[:60]
+    names = {str(n).casefold(): str(n) for n in (st.get("hire_pod_templates") or [])}
+    if not tpl or tpl.casefold() not in names:
+        raise PublicSkillError("template_missing", status=409)
+    tpl = names[tpl.casefold()]
+    view = _pod_template(tpl)
+    if view is None:
+        raise PublicSkillError("template_missing", status=409)
+    try:
+        from tubecli.core import muse
+        if not muse.settings()["profile"]:
+            raise PublicSkillError("skill_unavailable", status=503)     # chưa cấu hình Muse: không làm được clip
+    except ImportError:
+        raise PublicSkillError("skill_unavailable", status=503)
+    try:
+        clips = int(payload.get("clips") or 0)
+    except (TypeError, ValueError):
+        clips = 0
+    from tubecli.core.public_agents import HIRE_POD_CLIPS_MAX
+    cmax = max(1, min(HIRE_POD_CLIPS_MAX, int(st.get("hire_pod_clips_max") or 6)))
+    if not 1 <= clips <= cmax:
+        raise PublicSkillError("bad_clips", status=422)
+    raw_models = payload.get("models") or []
+    if raw_models and not st.get("hire_pod_models", True):
+        raise PublicSkillError("models_not_allowed", status=409)
+    if raw_models and payload.get("consent") is not True:
+        raise PublicSkillError("need_consent", status=422)
+    own = [p for p in (view.get("model_images") or []) if isinstance(p, str) and os.path.isfile(p)]
+    if not raw_models and not own:
+        raise PublicSkillError("need_model", status=422)
+    ratio = str(payload.get("ratio") or "")
+    async with _lock:
+        if code in _jobs:            # cloud gọi lại (mạng chớp) — không mở việc thứ hai
+            return {"ok": True, "job": code}
+        models = _pod_images(raw_models, POD_MAX_MODELS, code, "m")
+        products = _pod_images(payload.get("products") or [], POD_MAX_PRODUCTS, code, "p")
+        job = {"code": code, "kind": "pod", "agent_id": entry["agent_id"], "preset": tpl, "brief": brief,
+               "unit": "clip", "clips": clips, "price": int(payload.get("price") or 0),
+               "models": models, "products": products, "consent": bool(raw_models),
+               "ratio": ratio if ratio in ("9:16", "16:9", "1:1") else "",
+               "status": "accepted", "task_id": "", "files": [], "paths": [], "seconds": 0, "at": time.time()}
+        _jobs[code] = job
+        _save(job)
+        job["_task"] = asyncio.create_task(_run(code))
+    logger.info("[hire] nhận việc video quảng cáo %s: mẫu «%s», %s clip, %s ảnh người mẫu, %s ảnh sản phẩm",
+                code, tpl, clips, len(models), len(products))
     return {"ok": True, "job": code}
 
 
@@ -259,9 +370,120 @@ def _http_json(path: str) -> Dict[str, Any]:
         return json.loads(res.read().decode("utf-8", "replace")) or {}
 
 
+def _http_post_json(path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    from tubecli.extensions.content_video.pipeline import _base_url
+    raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(_base_url() + path, data=raw, method="POST",
+                                 headers={"Content-Type": "application/json; charset=utf-8"})
+    with urllib.request.urlopen(req, timeout=30) as res:
+        return json.loads(res.read().decode("utf-8", "replace")) or {}
+
+
+def _pod_final(task_id: str) -> str:
+    """Video đã ghép của task Pod — đọc checkpoint của pipe (data/pod_studio/ref_video/<task>/state.json)."""
+    from tubecli.config import DATA_DIR
+    d = os.path.join(str(DATA_DIR), "pod_studio", "ref_video", re.sub(r"[^\w.-]", "_", str(task_id)))
+    try:
+        with open(os.path.join(d, "state.json"), encoding="utf-8") as f:
+            st = json.load(f)
+        return str(((st or {}).get("final") or {}).get("path") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+async def _run_pod(code: str) -> None:
+    """Việc «video quảng cáo từ ảnh»: xếp task «Video từ ảnh tham chiếu» của Pod Studio lên Bảng việc của chủ (nhãn AI
+    BẬT CỨNG, origin mang mã việc), bám tiến độ, giao video đã ghép. Cấu trúc như _run của content_video."""
+    job = _jobs[code]
+    await _report(job, "running", "queued", 2)
+    if job["status"] == "closed":
+        return
+    tid = str(job.get("task_id") or "")
+    if not tid:
+        body = {"model_images": job.get("models") or [], "product_images": job.get("products") or [],
+                "request": job["brief"], "template": job["preset"], "clips": job["clips"],
+                "watermark": True, "hire": code, "created_by": "hire", "title": f"Việc thuê Town {code}"}
+        if job.get("ratio"):
+            body["aspect"] = job["ratio"]
+        try:
+            out = await asyncio.to_thread(_http_post_json, "/api/v1/pod_studio/ref-video/run", body)
+        except Exception as e:      # noqa: BLE001 — Pod Studio tắt / mẫu mất / thiếu ảnh
+            logger.warning("[hire] %s: không xếp được task Pod: %s", code, e)
+            out = {}
+        tid = str(((out or {}).get("task") or {}).get("id") or "")
+        if not tid:
+            await _report(job, "failed", err="queue_failed")
+            job["status"] = "failed"
+            _save(job)
+            return
+        job["task_id"] = tid
+        job["status"] = "running"
+        _save(job)
+
+    last_said, said_at = "", time.time()
+    deadline = time.time() + 5.5 * 3600
+    while time.time() < deadline:
+        await asyncio.sleep(POLL_SEC)
+        if job["status"] == "closed":
+            logger.info("[hire] %s: cloud đã đóng — ngừng theo (task %s vẫn trên bảng)", code, tid)
+            return
+        try:
+            t = (await asyncio.to_thread(_http_json, f"/api/v1/codex/tasks/{tid}")).get("task") or {}
+            evs = (await asyncio.to_thread(_http_json, f"/api/v1/codex/tasks/{tid}/events")).get("events") or []
+        except Exception as e:      # noqa: BLE001
+            logger.debug("[hire] %s poll lỗi: %s", code, e)
+            continue
+        st = str(t.get("status") or "").lower()
+        step = _latest_step(evs)
+        if st in ("failed", "error", "cancelled", "canceled"):
+            await _report(job, "failed", err="job_failed")
+            job["status"] = "failed"
+            _save(job)
+            return
+        if st in ("review", "completed", "done", "success"):
+            path = await asyncio.to_thread(_pod_final, tid)
+            if not path or not os.path.isfile(path):
+                await _report(job, "failed", err="no_files")
+                job["status"] = "failed"
+                _save(job)
+                return
+            from tubecli.extensions.content_video.pipeline import media_seconds
+            secs = int(await asyncio.to_thread(media_seconds, path) or 0)
+            name = f"video-quang-cao-{code}.mp4"
+            job["paths"] = [path]
+            job["files"] = [{"name": name, "bytes": os.path.getsize(path), "type": "video/mp4"}]
+            job["seconds"] = secs
+            _save(job)
+            out = await _report(job, "ready", "done", 100, files=job["files"], seconds=secs)
+            job["status"] = "delivered" if out.get("status") == "delivered" else str(out.get("status") or "reported")
+            _save(job)
+            logger.info("[hire] %s giao xong video quảng cáo (%ss) → cloud nói %s", code, secs, out)
+            return
+        key = f"{st}:{step}"
+        now = time.time()
+        if (key != last_said and now - said_at >= REPORT_MIN_GAP) or now - said_at >= HEARTBEAT_SEC:
+            await _report(job, "running", step or st, _POD_STEP_PCT.get(step, 10))
+            last_said, said_at = key, now
+    await _report(job, "failed", err="timeout")
+    job["status"] = "failed"
+    _save(job)
+
+
 async def _run(code: str) -> None:
     job = _jobs.get(code)
     if not job:
+        return
+    if job.get("kind") == "pod":
+        try:
+            await _run_pod(code)
+        except Exception as e:      # noqa: BLE001 — lỗi bất ngờ: báo hỏng để khách được hoàn
+            logger.warning("[hire] %s hỏng: %s", code, e)
+            try:
+                await _report(job, "failed", err="job_failed")
+            except Exception:      # noqa: BLE001
+                pass
+            job["status"] = "failed"
+            _save(job)
         return
     try:
         await _report(job, "running", "queued", 2)
@@ -356,9 +578,11 @@ async def _run(code: str) -> None:
                 logger.info("[hire] %s giao xong: %s (%ss) → cloud nói %s", code, name, secs, out)
                 return
             key = f"{st}:{step}"
-            if key != last_said and time.time() - said_at >= REPORT_MIN_GAP:
+            now = time.time()
+            # đổi bước → báo (giãn REPORT_MIN_GAP); đứng một bước lâu (chờ làn video) → vẫn báo HEARTBEAT_SEC/lần
+            if (key != last_said and now - said_at >= REPORT_MIN_GAP) or (said_at and now - said_at >= HEARTBEAT_SEC):
                 await _report(job, "running", step or st, _STEP_PCT.get(step, 10))
-                last_said, said_at = key, time.time()
+                last_said, said_at = key, now
         await _report(job, "failed", err="timeout")
         job["status"] = "failed"
         _save(job)
