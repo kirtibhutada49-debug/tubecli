@@ -84,6 +84,15 @@ try:
     ok(r["ok"] is False and not CALLS and "pick a model" in r["message"], "không có model → không gọi brain", r)
     ok(R.is_llm_error("[Gemini Error] x") and R.is_llm_error("  [Error] y") and not R.is_llm_error("OK [Error]"),
        "nhận diện chuỗi lỗi ở ĐẦU câu, không phải chỗ khác")
+    # 3/10/2026: Cloudflare chưa có credential → brain trả t("brain.no_api_key") («⚠️ No API key…», KHÔNG có
+    # tiền tố [Error]) trong 0 giây → probe từng kết luận «sống». Câu lỗi đã dịch phải là HỎNG.
+    from tubecli.i18n import t as _t
+    soft = R.probe_result("@cf/meta/llama-3.3-70b-instruct-fp8-fast", _t("brain.no_api_key", model="@cf/meta/llama-3.3-70b-instruct-fp8-fast"), 0.0)
+    ok(soft["ok"] is False and "message" in soft, "câu «chưa có API key» đã dịch → ok=False", soft)
+    ok(R.probe_result("m", "⚠️ anything", 0.0)["ok"] is False, "lời đáp bắt đầu bằng ⚠ → hỏng")
+    ok(R.probe_result("m", _t("brain.no_model_available"), 0.0)["ok"] is False, "«không có model» → hỏng")
+    ok(R.probe_result("m", "OK", 0.4)["ok"] is True and not R.is_soft_error("[Cloudflare Error] x"),
+       "lời đáp thật vẫn sống; chuỗi [Error] để is_llm_error lo")
 finally:
     AgentBrain._call_llm = orig
 
