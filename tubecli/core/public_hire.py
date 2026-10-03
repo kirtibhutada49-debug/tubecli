@@ -425,7 +425,7 @@ async def _run_pod(code: str) -> None:
     if not tid:
         body = {"model_images": job.get("models") or [], "product_images": job.get("products") or [],
                 "request": job["brief"], "template": job["preset"], "clips": job["clips"],
-                "hire": code, "created_by": "hire", "title": f"Việc thuê Town {code}"}
+                "hire": code, "created_by": "hire", "title": f"Town hire {code}"}
         if job.get("ratio"):
             body["aspect"] = job["ratio"]
         # Tuỳ biến của khách: chỉ gửi khi có — trống thì Pod lấy theo mẫu (_apply_template)
