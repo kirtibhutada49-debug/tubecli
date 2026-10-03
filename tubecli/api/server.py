@@ -5870,6 +5870,9 @@ def _i18n_etag_matches(if_none_match, etag: str) -> bool:
     return False
 
 
+I18N_CACHE_CONTROL = "max-age=0, stale-while-revalidate=86400"
+
+
 @app.get("/api/v1/i18n/{lang}")
 async def get_aggregated_i18n(lang: str, request: Request, ns: Optional[str] = None):
     """Aggregate locale files from ALL extensions into a single flat dict.
@@ -5885,7 +5888,10 @@ async def get_aggregated_i18n(lang: str, request: Request, ns: Optional[str] = N
         lang = "en"
 
     body, etag = await asyncio.to_thread(_i18n_bundle, lang, _i18n_parse_ns(ns))
-    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    # stale-while-revalidate: trình duyệt dùng NGAY bản đã đệm (vẽ trang không chờ một vòng
+    # đi-về qua tunnel) rồi hỏi «còn như cũ không?» ở nền; ETag đổi là lượt sau có bản mới.
+    # Trước là no-cache: mỗi lần mở trang đều chặn chờ 304 (đo 20/9: 1,37 s ngay trên máy).
+    headers = {"ETag": etag, "Cache-Control": I18N_CACHE_CONTROL}
     if _i18n_etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
 

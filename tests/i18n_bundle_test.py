@@ -12,7 +12,7 @@ khi import server):
   A. hình dạng phản hồi không đổi: dict phẳng, en lót dưới + <lang> đè lên, extension sau đè extension
      trước, thân giống hệt cách tuần tự hoá cũ, ?v= bị bỏ qua, lang lạ → en, tệp JSON hỏng bị bỏ qua
   B. ?ns=codex,common → chỉ khoá «codex.» / «common.»; đảo thứ tự ns → cùng ETag; ns rỗng = trọn bộ
-  C. ETag + If-None-Match → 304 không thân; Cache-Control: no-cache (KHÔNG no-store); ETag đổi theo ns
+  C. ETag + If-None-Match → 304 không thân; Cache-Control: max-age=0, stale-while-revalidate=86400 (KHÔNG no-store; 3/10: trước là no-cache); ETag đổi theo ns
   D. đệm: lượt sau không đọc lại tệp; sửa tệp (mtime đổi) → từ điển mới + ETag mới, không cần restart;
      cài / gỡ extension → khoá xuất hiện / biến mất
   E. khoá thiếu ở vi → mượn en (máy chủ) — và i18n.js vẫn tra _fallback từng khoá (client)
@@ -178,12 +178,12 @@ r1 = c.get(URL + "vi")
 etag = r1.headers.get("etag")
 ok(bool(etag) and etag == '"%s"' % hashlib.sha1(r1.content).hexdigest(),
    "ETag = sha1 của thân, có ngoặc kép", etag)
-ok(r1.headers.get("cache-control") == "no-cache", "Cache-Control: no-cache (hỏi lại, giữ bản đã tải)",
+ok(r1.headers.get("cache-control") == "max-age=0, stale-while-revalidate=86400", "Cache-Control: stale-while-revalidate (dùng ngay bản đệm, hỏi lại ở nền)",
    r1.headers.get("cache-control"))
 ok("no-store" not in r1.headers.get("cache-control", ""), "không no-store")
 r2 = c.get(URL + "vi", headers={"If-None-Match": etag})
 ok(r2.status_code == 304 and r2.content == b"", "If-None-Match khớp → 304 không thân", (r2.status_code, r2.content[:50]))
-ok(r2.headers.get("etag") == etag and r2.headers.get("cache-control") == "no-cache",
+ok(r2.headers.get("etag") == etag and r2.headers.get("cache-control") == "max-age=0, stale-while-revalidate=86400",
    "304 vẫn mang ETag + Cache-Control", dict(r2.headers))
 r3 = c.get(URL + "vi", headers={"If-None-Match": 'W/%s, "something-else"' % etag})
 ok(r3.status_code == 304, "dạng yếu W/… trong danh sách cũng khớp", r3.status_code)
