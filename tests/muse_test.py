@@ -265,6 +265,10 @@ except M.MuseError as e:
 js_src = (ROOT / "tubecli" / "extensions" / "browser" / "muse_tool.cjs").read_text(encoding="utf-8")
 ok("data-hatch-video-wrapper" in js_src and "saveVideos" in js_src and "want_videos" in js_src and "VIDEO_GRACE_MS" in js_src,
    "driver biết tải video (wrapper + poster + chờ video)")
+# 3/10/2026: đính ảnh quá sớm → Muse lặng lẽ bỏ ảnh mà vẫn gửi tin (demo 2 người mất chàng trai, clip 3 #165 sai khung)
+_att = js_src[js_src.index("if (files.length) {"):js_src.index("await ta.click(")]
+ok("blob|data" in _att and "showed in the composer" in _att and "round < 2" in _att and _att.index("previews") < _att.index("return { ok: false"),
+   "driver đính ảnh xong phải THẤY đủ ảnh xem trước; thiếu thì đính lại 1 lần, vẫn thiếu thì báo lỗi (không gửi tin thiếu ảnh)")
 
 # ── E3 ────────────────────────────────────────────────────────────────────────
 print("E3. cổng CDP từ dòng lệnh Chromium + mở ẩn hỏng sớm (2/10/2026: server restart mất dấu preview_cdp.json)")

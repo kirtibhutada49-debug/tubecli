@@ -312,8 +312,31 @@ async function ask(ctx, req) {
       (els) => els.map((e) => e.getAttribute('data-message-id')));
 
     if (files.length) {
-      await page.locator(SEL.fileInput).first().setInputFiles(files);
-      await sleep(1500);
+      // Đính QUÁ SỚM (ô soạn vừa hiện, React chưa gắn xong) → Muse LẶNG LẼ bỏ ảnh mà tin vẫn gửi đi: Muse vẽ / dựng từ
+      // ảnh CŨ trong chat hoặc tự bịa người (đo 3/10/2026: demo 2 người mất hẳn chàng trai, clip 3 của #165 bắt đầu
+      // từ khung cuối clip 1). Đính xong phải THẤY đủ ảnh xem trước (img blob:/data: trong ô soạn); thiếu thì đính
+      // lại MỘT lần; vẫn thiếu thì báo lỗi — thà lỗi còn hơn gửi tin thiếu ảnh.
+      const previews = () => page.locator(SEL.composer).first().evaluate(
+        (e) => [...e.querySelectorAll('img')].filter((i) => /^(blob|data):/.test(i.src || '')).length).catch(() => 0);
+      const base = await previews();
+      let got = 0;
+      for (let round = 0; round < 2 && got < files.length; round++) {
+        if (round) {
+          if (process.env.MUSE_DEBUG) console.error(`[muse] only ${got}/${files.length} attachment(s) showed — attaching again`);
+          await sleep(2500);
+        }
+        await page.locator(SEL.fileInput).first().setInputFiles(files);
+        const until = Date.now() + 12000;
+        while (Date.now() < until) {
+          got = (await previews()) - base;
+          if (got >= files.length) break;
+          await sleep(300);
+        }
+      }
+      if (got < files.length) {
+        return { ok: false, kind: 'error', error: `Muse did not take the attached image(s): ${Math.max(0, got)}/${files.length} showed in the composer.`, url: page.url() };
+      }
+      await sleep(800);
     }
     // Ảnh lớn (bảng panorama PNG 2,5 MB — #160, 2/10/2026) tải lên lâu, ô soạn tin bị khoá quá 30 s → có file thì chờ
     // tới 150 s; vẫn kẹt thì Esc (đóng lớp phủ) rồi ép bấm.
