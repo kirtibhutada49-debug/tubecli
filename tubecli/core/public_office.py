@@ -252,7 +252,7 @@ def _options(raw: Any) -> Dict[str, Any]:
     toc = o.get("toc", "auto")
     toc = "auto" if toc in ("auto", None, "") else bool(toc)
     return {"size": size, "line": line, "toc": toc, "number_headings": o.get("number_headings", True) is not False,
-            "fix_dates": True}
+            "fix_dates": True, "toc_position": "end" if o.get("toc_position") == "end" else "start"}
 
 
 async def accept(payload: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]:

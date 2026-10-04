@@ -262,6 +262,11 @@ async def main():
     check("29 file KHÔNG có kiểu «Normal» vẫn chuẩn hoá được (tạo Normal làm mặc định)",
           not had and abs(dn.styles["Normal"].font.size.pt - 13) < .1, had)
 
+    check("30 vị trí mục lục khách chọn xuống skill: end giữ nguyên, thiếu/lạ → start (trang riêng đầu văn bản)",
+          public_office._options({"toc_position": "end"})["toc_position"] == "end"
+          and public_office._options({})["toc_position"] == "start"
+          and public_office._options({"toc_position": "x"})["toc_position"] == "start")
+
     models = public_office.ai_models()
     check("19 danh sách model cho ô chọn: [{provider, models[]}] (máy không có cloud_api thì rỗng, không nổ)",
           isinstance(models, list) and all(isinstance(g.get("provider"), str) and isinstance(g.get("models"), list)
