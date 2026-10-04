@@ -269,7 +269,10 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
     out.update(_hire_settings(raw, old or {}))
     out.update(_hire_pod_settings(raw, old or {}))
     out.update(_hire_office_settings(raw, old or {}))
-    if enabled and "browser.remote" in skills and not out["browser_profile"]:
+    # Cho thuê được khi có ÍT NHẤT một đường: hồ sơ lẻ (bản cũ), danh sách hồ sơ, hoặc cho
+    # khách tạo hồ sơ sạch. Thiếu cả ba thì bật skill chỉ để báo lỗi lúc khách bấm.
+    if (enabled and "browser.remote" in skills and not out["browser_profile"]
+            and not out["browser_profiles"] and not out["browser_fresh"]):
         raise ValueError("no_browser_profile")
     return out
 
@@ -279,6 +282,15 @@ BROWSER_UPLOADS = ("media", "off")     # media = ảnh/video/PDF từ MÁY NGƯ�
 # Giá thuê trình duyệt (xu/PHÚT, 0 = miễn phí) — user 29/9 «cho thuê browser giá theo thời lượng phiên».
 # = BROWSER_PRICE_MAX của cloud (lib/browserRent.js). Cloud giữ tiền, tính phút thực, trả chủ.
 BROWSER_PRICE_MAX = 5000
+# Bán theo PHIÊN (user 4/10/2026: «giá thuê theo phiên — mỗi phiên cố định bao nhiêu phút»).
+# 'minute' = bản cũ (khách chọn phút, trả phút thực); 'session' = mua trọn phiên dài cố định.
+# Máy lõi cũ không khai mode ⇒ cloud đọc ra 'minute': KHÔNG được để giá xu/phút bị hiểu thành
+# giá/phiên, chủ sẽ tụt tiền hàng chục lần.
+BROWSER_MODES = ("minute", "session")
+# Phiên cố định dài hơn trần của chế độ phút (60) — bán "nửa ngày" được.
+BROWSER_SESSION_MINUTES = (30, 5, 240)
+BROWSER_SLOTS_MAX = 8            # = BROWSER_SLOTS_MAX của cloud (lib/publicAgents.js)
+BROWSER_PROFILES_MAX = 12        # = BROWSER_PROFILES_MAX của cloud
 
 
 def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
@@ -303,10 +315,47 @@ def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any
                     else old.get("browser_price") or 0)
     except (TypeError, ValueError):
         price = 0
+    mode = str(raw.get("browser_mode") or old.get("browser_mode") or BROWSER_MODES[0]).strip().lower()
+    sd, slo, shi = BROWSER_SESSION_MINUTES
+    try:
+        smins = int(raw.get("browser_session_minutes")
+                    if raw.get("browser_session_minutes") not in (None, "")
+                    else old.get("browser_session_minutes") or sd)
+    except (TypeError, ValueError):
+        smins = sd
+    try:
+        slots = int(raw.get("browser_slots") if raw.get("browser_slots") not in (None, "")
+                    else old.get("browser_slots") or 1)
+    except (TypeError, ValueError):
+        slots = 1
+    # NHIỀU hồ sơ cho thuê (lưới cho khách chọn). Mỗi tên phải CÓ THẬT trên máy — và lưu ý
+    # TÊN HỒ SƠ SẼ LÊN TOWN cho người lạ đọc (trước đây tên không bao giờ rời máy), nên đây là
+    # danh sách chủ TỰ CHỌN từng cái, không phải cả máy.
+    if "browser_profiles" in raw:
+        names, have = [], _profile_names()
+        for x in (raw.get("browser_profiles") or []):
+            n = _clean_text(x, 64)
+            if not n:
+                continue
+            if n not in have:
+                raise ValueError("bad_browser_profile")
+            if n not in names:
+                names.append(n)
+        profiles = names[:BROWSER_PROFILES_MAX]
+    else:
+        profiles = [str(x) for x in (old.get("browser_profiles") or [])][:BROWSER_PROFILES_MAX]
+    if "browser_fresh" in raw:
+        fresh = bool(raw.get("browser_fresh"))
+    else:
+        fresh = bool(old.get("browser_fresh"))
     # browser_minutes = TRẦN mỗi phiên; khi có giá, khách chọn số phút ≤ trần (cloud giữ tiền theo nó).
     return {"browser_profile": bp, "browser_minutes": max(lo, min(hi, mins)),
             "browser_upload": up if up in BROWSER_UPLOADS else BROWSER_UPLOADS[0],
-            "browser_price": max(0, min(BROWSER_PRICE_MAX, price))}
+            "browser_price": max(0, min(BROWSER_PRICE_MAX, price)),
+            "browser_mode": mode if mode in BROWSER_MODES else BROWSER_MODES[0],
+            "browser_session_minutes": max(slo, min(shi, smins)),
+            "browser_slots": max(1, min(BROWSER_SLOTS_MAX, slots)),
+            "browser_profiles": profiles, "browser_fresh": fresh}
 
 
 HIRE_UNITS = ("job", "minute")
@@ -464,7 +513,9 @@ def local_town_rules() -> Dict[str, Any]:
                  "presets_max": HIRE_PRESETS_MAX, "presets_need_market_code": True},
         "pod": {"price_max": HIRE_PRICE_MAX, "unit": "clip", "clips_max": HIRE_POD_CLIPS_MAX,
                 "templates_max": HIRE_POD_TEMPLATES_MAX, "models_max": 3, "products_max": 2, "ai_label": True},
-        "browser": {"price_max": BROWSER_PRICE_MAX, "unit": "minute", "minutes": [lo, hi]},
+        "browser": {"price_max": BROWSER_PRICE_MAX, "unit": "minute", "minutes": [lo, hi],
+                    "modes": list(BROWSER_MODES), "session_minutes": list(BROWSER_SESSION_MINUTES[1:]),
+                    "slots": [1, BROWSER_SLOTS_MAX], "profiles_max": BROWSER_PROFILES_MAX, "fresh": True},
         "office": {"price_max": HIRE_PRICE_MAX, "unit": "page", "pages_max": HIRE_OFFICE_PAGES_MAX},
     }
 
@@ -668,11 +719,23 @@ def _profile_row(entry: Dict[str, Any], load: Optional[Dict[str, float]] = None)
     elif "hire_office_on" in st:
         row["hire_office"] = {"on": False}
     if "browser.remote" in skills:
-        # Giá thuê trình duyệt (xu/phút) + trần phút/phiên: cloud hiện cho khách chọn số phút, GIỮ
-        # tiền theo đó rồi chốt theo phút thực. Tên hồ sơ trình duyệt KHÔNG bao giờ rời máy.
+        # Giá thuê trình duyệt + cách tính. 'minute' = khách chọn số phút, cloud giữ tiền theo đó
+        # rồi chốt theo phút thực; 'session' = mua trọn một phiên dài cố định (4/10).
         dflt, lo, hi = BROWSER_MINUTES
+        sd, slo, shi = BROWSER_SESSION_MINUTES
+        mode = str(st.get("browser_mode") or BROWSER_MODES[0])
+        # TÊN HỒ SƠ giờ CÓ rời máy — nhưng CHỈ những hồ sơ chủ TỰ TICK cho thuê
+        # (browser_profiles), để khách chọn trong lưới trên Town.
+        # KHÔNG lấy browser_profile của bản cũ làm mặc định: chủ đang cho thuê bằng bản cũ chưa
+        # bao giờ đồng ý công khai TÊN hồ sơ, nâng cấp xong mà tên tự hiện lên Town là lộ sau
+        # lưng họ. Danh sách rỗng ⇒ Town không bày lưới, máy tự chọn hồ sơ như trước.
+        names = [str(x) for x in (st.get("browser_profiles") or [])][:BROWSER_PROFILES_MAX]
         row["browser"] = {"price": max(0, min(BROWSER_PRICE_MAX, int(st.get("browser_price") or 0))),
-                          "minutes_max": max(lo, min(hi, int(st.get("browser_minutes") or dflt)))}
+                          "minutes_max": max(lo, min(hi, int(st.get("browser_minutes") or dflt))),
+                          "mode": mode if mode in BROWSER_MODES else BROWSER_MODES[0],
+                          "session_minutes": max(slo, min(shi, int(st.get("browser_session_minutes") or sd))),
+                          "slots": max(1, min(BROWSER_SLOTS_MAX, int(st.get("browser_slots") or 1))),
+                          "fresh": bool(st.get("browser_fresh")), "profiles": names}
     return row
 
 
@@ -910,7 +973,11 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
         opts = {**opts, "_agent_id": agent_id, "_caller": caller}
         if skill_id == "browser.remote":
             # phiên gắn với MỘT người xem + hồ sơ/phút/tải lên chủ đã chọn
-            opts["_settings"] = {k: st.get(k) for k in ("browser_profile", "browser_minutes", "browser_upload")}
+            opts["_settings"] = {k: st.get(k) for k in (
+                "browser_profile", "browser_minutes", "browser_upload",
+                # 4/10: lưới nhiều hồ sơ, hồ sơ sạch tạo theo yêu cầu, số chỗ chạy song song
+                "browser_profiles", "browser_fresh", "browser_slots",
+                "browser_mode", "browser_session_minutes")}
         result = await asyncio.wait_for(skill.handler(text, opts), timeout=INVOKE_TIMEOUT_SEC)
         ok = True
         return result

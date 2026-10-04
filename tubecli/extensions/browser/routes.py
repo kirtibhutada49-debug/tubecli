@@ -1067,6 +1067,42 @@ async def launch_public_preview(profile: str) -> dict:
             _launching_profiles.pop(profile, None)
 
 
+def public_browser_capacity(names) -> dict:
+    """Hồ sơ nào đang bận + RAM còn mở nổi mấy phiên — KHÔNG mở gì cả, chỉ đo.
+
+    Cho action «info» của skill browser.remote: Town phải khoá nút «Thuê» TRƯỚC khi khách
+    bấm, chứ không để họ trả tiền rồi nhận lỗi (user 4/10/2026: «server quá tải thì không
+    cho thuê thêm»). Cùng công thức với _low_memory_reason mà launch_public_preview đang áp,
+    nên con số ở đây khớp với cái cổng thật sẽ quyết định.
+    """
+    out = []
+    for n in names:
+        try:
+            busy = bool(_is_launching(str(n)) or is_profile_running(str(n)))
+        except Exception:      # noqa: BLE001 — đo được tới đâu báo tới đó
+            busy = False
+        out.append({"name": str(n), "busy": busy})
+    avail = per = None
+    try:
+        avail = _available_ram_mb()
+        per = _preview_session_mb()
+    except Exception:      # noqa: BLE001
+        pass
+    # avail = RAM CÒN TRỐNG (phiên đang chạy đã trừ rồi) ⇒ đây là số phiên mở THÊM được.
+    ram_slots = None
+    if avail is not None and per:
+        ram_slots = max(0, int(avail) // int(per))
+    can_create = False
+    try:
+        from . import shardx_runtime as _sx
+        can_create = bool(_sx.installed_versions())
+    except Exception:      # noqa: BLE001 — chưa có nhân thì không tạo được hồ sơ mới
+        can_create = False
+    return {"profiles": out, "ram_free_mb": None if avail is None else int(avail),
+            "session_mb": None if per is None else int(per), "ram_slots": ram_slots,
+            "can_create": can_create}
+
+
 def stop_public_preview(profile: str, port: int) -> None:
     """Tắt preview cô lập của phiên người lạ + dọn file họ đã tải lên (temp_uploads/pub<port>_*)."""
     import shutil

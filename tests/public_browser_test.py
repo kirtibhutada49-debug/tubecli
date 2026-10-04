@@ -19,6 +19,8 @@ from tubecli.core import auth  # noqa: E402
 _tmp = tempfile.mkdtemp(prefix="pubbrowser_")
 auth._guest_file = lambda: __import__("pathlib").Path(_tmp) / "guest_tokens.json"
 auth._guest_cache.clear()
+from tubecli.core import public_host as _public_host  # noqa: E402
+_public_host._path = lambda: os.path.join(_tmp, "public_host.json")
 
 from tubecli.api import server  # noqa: E402
 from tubecli.core import origin_guard as og  # noqa: E402
@@ -28,6 +30,15 @@ from tubecli.core.ws_auth import origin_ok  # noqa: E402
 from tubecli.extensions.browser import routes as br  # noqa: E402
 
 passed = failed = 0
+
+
+def _err(fn):
+    """Mã lỗi ValueError của normalise (hay 'no-error') — dùng cho các bài kiểm chặn cài đặt."""
+    try:
+        fn()
+        return "no-error"
+    except ValueError as e:
+        return str(e)
 
 
 def check(name, ok, detail=""):
@@ -168,6 +179,15 @@ async def fake_launch(profile):
 
 br.launch_public_preview = fake_launch
 br.stop_public_preview = lambda profile, port: stopped.append((profile, port))
+# Đo RAM / hồ sơ bận là việc của routes (có test riêng: browser_oom_evidence_test.py). fake_launch
+# ở trên đã bỏ qua cả preflight đó, nên nếu đây đo THẬT thì cả nhóm bài dưới phụ thuộc RAM trống
+# của máy chạy test — máy đang bận là mọi bài đỏ với «hết chỗ». Stub: còn chỗ, hồ sơ rảnh.
+_cap = {"ram_slots": 8, "can_create": False}
+br.public_browser_capacity = lambda names: {
+    "profiles": [{"name": str(n), "busy": False} for n in names],
+    "ram_free_mb": 8000, "session_mb": 800,
+    "ram_slots": max(0, _cap["ram_slots"] - len(pb._sessions)), "can_create": _cap["can_create"],
+}
 ST = {"browser_profile": "shared", "browser_minutes": 10, "browser_upload": "off"}
 
 
@@ -188,7 +208,7 @@ async def scenario():
     r2 = await pb.resolve('{"action":"start"}', {"_agent_id": "A1", "_caller": "aaaa1111", "_settings": ST})
     sc = auth.guest_scope_for(r1["token"])
     await pb.resolve('{"action":"stop","session":"%s"}' % r1["session"], {"_agent_id": "A1", "_caller": "bbbb2222", "_settings": ST})
-    still = "A1" in pb._sessions
+    still = any(s["agent_id"] == "A1" for s in pb._sessions.values())
     await pb.resolve('{"action":"stop","session":"%s"}' % r1["session"], {"_agent_id": "A1", "_caller": "aaaa1111", "_settings": ST})
     return r1, busy, r2, sc, still
 
@@ -221,15 +241,16 @@ async def expiry():
     loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
     s = await pb.resolve('{"action":"start"}', {"_agent_id": "A2", "_caller": "cccc3333",
                                                 "_settings": {**ST, "browser_minutes": 5}})
-    pb._sessions["A2"]["task"].cancel()
-    pb._sessions["A2"]["task"] = asyncio.create_task(pb._expire_later("A2", s["session"], 0.05))
+    pb._sessions[s["session"]]["task"].cancel()
+    pb._sessions[s["session"]]["task"] = asyncio.create_task(pb._expire_later(s["session"], 0.05))
     loop.run_in_executor(None, _t.sleep, 1.6)
     await asyncio.sleep(3.0)
     return s
 
 
 s = asyncio.run(expiry())
-check("hết giờ → tự thu token + tắt browser", "A2" not in pb._sessions and auth.guest_scope_for(s["token"]) is None)
+check("hết giờ → tự thu token + tắt browser",
+      s["session"] not in pb._sessions and auth.guest_scope_for(s["token"]) is None)
 # 28/9: _end tự huỷ chính task hẹn giờ → lệnh huỷ ập vào await tắt preview → trình duyệt chạy
 # mãi, giữ hồ sơ. Kiểm ĐÚNG việc tắt đã xảy ra, không chỉ việc thu token.
 check("hết giờ → preview THẬT SỰ được tắt (không mồ côi giữ hồ sơ)", ("shared", s["port"]) in stopped, stopped)
@@ -407,8 +428,8 @@ async def owner_vs_stranger():
     o = await pb.resolve('{"action":"start"}', {"_agent_id": "A3", "_caller": "abcdef99", "_settings": ST})
     x = await pb.resolve('{"action":"start"}', {"_agent_id": "A4", "_caller": "12345678", "_settings": ST})
     so, sx = auth.guest_scope_for(o["token"]), auth.guest_scope_for(x["token"])
-    for aid, r in (("A3", o), ("A4", x)):
-        await pb._end(aid, r["session"])
+    for r in (o, x):
+        await pb._end(r["session"])
     return o, x, so, sx
 
 
@@ -427,19 +448,36 @@ check("client cũ không gửi giá → giữ giá đang lưu",
       pa.normalise({"name": "Tro Ly", "skills": []}, old=dict(_np, browser_price=120))["browser_price"] == 120)
 _ent = {"agent_id": "A9", "hash": "f" * 16, "settings": dict(_np, browser_price=120, name="Tro Ly")}
 _row = pa._profile_row(_ent)
-check("hồ sơ đẩy mang khối browser {price, minutes_max}, KHÔNG lộ tên hồ sơ",
-      _row.get("browser") == {"price": 120, "minutes_max": 30} and "shared" not in str(_row), _row)
+# 4/10/2026: khách cần LƯỚI để chọn browser, nên tên hồ sơ CÓ rời máy — nhưng chỉ những hồ sơ
+# chủ TỰ TICK (browser_profiles). Hai luật thay cho luật «không bao giờ rời máy» cũ:
+check("hồ sơ đẩy mang khối browser đủ cách tính tiền + số chỗ",
+      _row.get("browser") == {"price": 120, "minutes_max": 30, "mode": "minute", "session_minutes": 30,
+                              "slots": 1, "fresh": False, "profiles": []}, _row)
+check("chủ dùng bản CŨ (chỉ browser_profile) → tên hồ sơ KHÔNG lên Town",
+      "shared" not in str(_row), _row)
+_ent_g = {"agent_id": "A7", "hash": "d" * 16,
+          "settings": dict(_np, name="Tro Ly", browser_profiles=["shared"], browser_mode="session",
+                           browser_session_minutes=45, browser_slots=3, browser_fresh=True)}
+_row_g = pa._profile_row(_ent_g)
+check("chủ TỰ TICK hồ sơ → tên lên Town để khách chọn trong lưới",
+      _row_g["browser"]["profiles"] == ["shared"], _row_g["browser"])
+check("…kèm chế độ phiên cố định, độ dài phiên, số chỗ, cho tạo hồ sơ sạch",
+      _row_g["browser"]["mode"] == "session" and _row_g["browser"]["session_minutes"] == 45
+      and _row_g["browser"]["slots"] == 3 and _row_g["browser"]["fresh"] is True, _row_g["browser"])
+check("hồ sơ KHÔNG có thật trên máy → không tick được",
+      _err(lambda: pa.normalise({"name": "Tro Ly", "enabled": True, "skills": ["browser.remote"],
+                                 "browser_profiles": ["khong-co-that"]})) == "bad_browser_profile")
 _ent2 = {"agent_id": "A8", "hash": "e" * 16, "settings": {"skills": ["douyin.resolve"], "name": "Khac"}}
 check("agent không bật skill trình duyệt → không có khối browser", "browser" not in pa._profile_row(_ent2))
 
 
 async def rent_minutes():
     a = await pb.resolve('{"action":"start","minutes":3}', {"_agent_id": "A5", "_caller": "dddd4444", "_settings": ST})
-    await pb._end("A5", a["session"])
+    await pb._end(a["session"])
     b = await pb.resolve('{"action":"start","minutes":99}', {"_agent_id": "A6", "_caller": "eeee5555", "_settings": ST})
-    await pb._end("A6", b["session"])
+    await pb._end(b["session"])
     c = await pb.resolve('{"action":"start","minutes":"x"}', {"_agent_id": "A7", "_caller": "ffff6666", "_settings": ST})
-    await pb._end("A7", c["session"])
+    await pb._end(c["session"])
     return a, b, c
 
 
@@ -447,6 +485,114 @@ _a, _b, _c = asyncio.run(rent_minutes())
 check("khách thuê 3 phút → phiên đúng 3 phút", 170 <= _a["expires_in"] <= 180, _a["expires_in"])
 check("xin quá trần (99) → kẹp về trần chủ đặt (10 phút)", 590 <= _b["expires_in"] <= 600, _b["expires_in"])
 check("số phút rác → cả trần như trước", 590 <= _c["expires_in"] <= 600, _c["expires_in"])
+
+# ── 10. Bản 4/10/2026: nhiều phiên, số chỗ, hồ sơ sạch ────────────────────────
+# User: «tối ưu danh sách browser dạng grid. có thể tạo thêm profile mới để thuê. nếu server
+# quá tải thì không cho thuê thêm đợi».
+#
+# Trước đây sổ phiên khoá theo AGENT nên người thứ hai LUÔN nhận «đang bận» dù máy còn thừa
+# RAM và chủ còn hồ sơ khác rảnh. Giờ một phiên cho mỗi HỒ SƠ, trần là số chỗ chủ đặt VÀ
+# RAM đo được — mỗi Chromium ~800 MB, mở quá thì OOM giết cả mấy cái cùng lúc.
+_MULTI = {"browser_profiles": ["p1", "p2"], "browser_minutes": 10, "browser_upload": "off",
+          "browser_slots": 2}
+
+
+def _reset_sessions():
+    pb._sessions.clear()
+
+
+async def _start(agent, caller, st, **req):
+    body = json.dumps({"action": "start", **req})
+    return await pb.resolve(body, {"_agent_id": agent, "_caller": caller, "_settings": st})
+
+
+def _code(coro):
+    try:
+        asyncio.run(coro)
+        return "no-error"
+    except pa.PublicSkillError as e:
+        return e.code
+
+
+# info: báo số chỗ + lưới hồ sơ, KHÔNG mở gì
+_reset_sessions()
+_info = asyncio.run(pb.resolve('{"action":"info"}', {"_agent_id": "B1", "_caller": "u1", "_settings": _MULTI}))
+check("info: trả lưới hồ sơ + số chỗ, không mở phiên nào",
+      _info["kind"] == "browserinfo" and [p["name"] for p in _info["profiles"]] == ["p1", "p2"]
+      and _info["slots"]["free"] == 2 and _info["slots"]["used"] == 0, _info)
+check("info: không có hồ sơ sạch khi chủ chưa bật", _info["can_create"] is False)
+
+
+# Hai người, hai hồ sơ, cùng lúc — bản cũ thì người thứ hai bị «đang bận»
+async def _two():
+    a = await _start("B1", "u1", _MULTI)
+    b = await _start("B1", "u2", _MULTI)
+    return a, b
+
+
+_reset_sessions()
+_s1, _s2 = asyncio.run(_two())
+check("2 chỗ + 2 hồ sơ → hai người thuê SONG SONG được (bản cũ: người thứ hai «đang bận»)",
+      _s1["profile"] != _s2["profile"] and _s1["session"] != _s2["session"],
+      (_s1.get("profile"), _s2.get("profile")))
+check("…mỗi phiên khoá đúng hồ sơ của nó trong token khách",
+      auth.guest_scope_for(_s1["token"])["profiles"] == [_s1["profile"]]
+      and auth.guest_scope_for(_s2["token"])["profiles"] == [_s2["profile"]])
+
+# Người thứ ba: hết hồ sơ VÀ hết chỗ → «đang có người dùng» (không phải lỗi kỹ thuật)
+check("hết hồ sơ rảnh → browser_busy (câu đúng cho agent ít hồ sơ)",
+      _code(_start("B1", "u3", _MULTI)) == "browser_busy")
+
+# Cùng người gọi lại → ĐÚNG phiên cũ, hạn không dài thêm (đã trả tiền cho phiên này)
+_again = asyncio.run(_start("B1", "u1", _MULTI))
+check("cùng người gọi lại → đúng phiên cũ, không mở phiên thứ hai",
+      _again["session"] == _s1["session"] and len(pb._sessions) == 2, len(pb._sessions))
+
+# Chọn hồ sơ KHÔNG có trong danh sách cho thuê
+check("hồ sơ ngoài danh sách cho thuê → browser_unavailable",
+      _code(_start("B1", "u9", _MULTI, profile="p-la")) == "browser_unavailable")
+
+# RAM là trần THẬT: chủ đặt 2 chỗ nhưng máy chỉ còn RAM cho 1
+_reset_sessions()
+_cap["ram_slots"] = 1
+_one = asyncio.run(_start("B1", "u1", _MULTI))
+check("RAM chỉ còn 1 chỗ → người thứ hai nhận browser_full dù chủ cho 2 chỗ",
+      _one["kind"] == "browserlive" and _code(_start("B1", "u2", _MULTI)) == "browser_full")
+_i2 = asyncio.run(pb.resolve('{"action":"info"}', {"_agent_id": "B1", "_caller": "u2", "_settings": _MULTI}))
+check("…và info nói trước: hết chỗ + còn bao lâu nữa có chỗ",
+      _i2["slots"]["free"] == 0 and 0 < _i2["slots"]["next_free_in"] <= 600, _i2["slots"])
+_cap["ram_slots"] = 8
+_reset_sessions()
+
+# ── Hồ sơ SẠCH: tạo khi thuê, XOÁ khi hết phiên ──────────────────────────────
+# Khách sau không được thừa hưởng đăng nhập của khách trước — nên hết phiên là xoá cả hồ sơ.
+from tubecli.extensions.browser import profile_manager as _pm   # noqa: E402
+
+_made, _killed = [], []
+_pm.create_profile = lambda name, **kw: (_made.append(name), {"name": name})[1]
+_pm.delete_profile = lambda name: (_killed.append(name), True)[1]
+_cap["can_create"] = True
+_FRESH = {**_MULTI, "browser_fresh": True}
+_f = asyncio.run(_start("B1", "u1", _FRESH, fresh=True))
+check("hồ sơ sạch: máy TỰ tạo hồ sơ mới mang tiền tố rent_",
+      len(_made) == 1 and _made[0].startswith(pb.FRESH_PREFIX) and _f["profile"] == _made[0], (_made, _f.get("profile")))
+check("…và báo cho cloud biết đây là hồ sơ sạch", _f.get("fresh") is True)
+asyncio.run(pb._end(_f["session"]))
+check("hết phiên → XOÁ cả hồ sơ sạch (khách sau không thừa hưởng đăng nhập)",
+      _killed == [_made[0]], _killed)
+# Hồ sơ THƯỜNG thì không được xoá, dù _end chạy cùng một đường.
+_killed.clear()
+_n = asyncio.run(_start("B1", "u5", _FRESH, profile="p1"))
+asyncio.run(pb._end(_n["session"]))
+check("hồ sơ của CHỦ thì không bao giờ bị xoá khi hết phiên", _killed == [], _killed)
+# Chủ tắt cho tạo hồ sơ sạch → xin fresh cũng ra hồ sơ thường
+_cap["can_create"] = False
+_reset_sessions()
+_made.clear()
+_nf = asyncio.run(_start("B1", "u1", _MULTI, fresh=True))
+check("chủ tắt hồ sơ sạch → xin fresh vẫn ra hồ sơ thường, không tạo gì",
+      _made == [] and _nf["profile"] in ("p1", "p2") and _nf.get("fresh") is False, (_made, _nf.get("profile")))
+_reset_sessions()
 
 shutil.rmtree(_tmp, ignore_errors=True)
 print(f"\n{passed} pass, {failed} fail")
