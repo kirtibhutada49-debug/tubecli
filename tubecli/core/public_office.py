@@ -81,6 +81,26 @@ def exact_pages() -> bool:
         return False
 
 
+def ai_models(limit: int = 80) -> list:
+    """Model chat máy gọi được — tab Công khai bày ô chọn «AI nhận diện khối» (user 4/10/2026: «thêm setting vào mục
+    public của agent để chủ server tự tuỳ chỉnh»). Cùng nguồn với /api/v1/office-editor/ai-models: provider có khả
+    năng chat và có khoá (9Router/Muse không cần khoá ở đây). Giá trị lưu là TÊN model — định tuyến theo tên y như agent."""
+    out = []
+    try:
+        from tubecli.extensions.cloud_api.extension import key_manager, PROVIDER_CAPABILITY
+        for p, caps in (PROVIDER_CAPABILITY or {}).items():
+            if "chat" not in caps:
+                continue
+            if p not in ("9router", "muse") and not key_manager.get_active_key(p):
+                continue
+            models = [str(m) for m in (key_manager.get_models(p) or []) if str(m).strip()]
+            if models:
+                out.append({"provider": p, "models": models[:limit]})
+    except Exception:      # noqa: BLE001 — không có cloud_api thì chỉ còn «chỉ luật»
+        pass
+    return out
+
+
 def _root(*parts: str) -> str:
     from tubecli.config import DATA_DIR
     d = os.path.join(str(DATA_DIR), "hire_office", *parts)

@@ -149,6 +149,10 @@ async def main():
           on_row.get("hire_office", {}).get("on") is True and on_row["hire_office"]["price"] == 30
           and "office.docx" in on_row["skills"]
           and off_row.get("hire_office") == {"on": False} and "office.docx" not in off_row["skills"], (on_row, off_row))
+    models = public_office.ai_models()
+    check("19 danh sách model cho ô chọn: [{provider, models[]}] (máy không có cloud_api thì rỗng, không nổ)",
+          isinstance(models, list) and all(isinstance(g.get("provider"), str) and isinstance(g.get("models"), list)
+                                           and g["models"] for g in models), models[:2])
 
 
 if __name__ == "__main__":

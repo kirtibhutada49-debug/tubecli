@@ -105,9 +105,18 @@ async def list_public_agents(request: Request):
         "pod_templates": public_agents.pod_template_cards(
             [t.get("name") for t in _shared_templates() if "ref_video" in (t.get("sections") or {})]),
         "pod_clips_max": public_agents.HIRE_POD_CLIPS_MAX,
-        # Skill chuẩn hoá Word (office.docx): máy có extension Office Editor không, đếm trang thật hay ước tính.
-        "office": public_agents.office_status(),
+        # Skill chuẩn hoá Word (office.docx): máy có extension Office Editor không, đếm trang thật hay ước tính,
+        # + model chat gọi được (ô chọn «AI nhận diện khối»).
+        "office": {**public_agents.office_status(), "models": _office_models()},
     }
+
+
+def _office_models() -> list:
+    try:
+        from tubecli.core import public_office
+        return public_office.ai_models()
+    except Exception:      # noqa: BLE001
+        return []
 
 
 def _shared_templates() -> list:
