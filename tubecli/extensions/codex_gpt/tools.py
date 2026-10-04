@@ -642,7 +642,7 @@ def _board_summary(args):
 TOWN_GUIDE = """# Putting an agent on Agent Town (tubecli.app) — guide for Codex
 
 Agent Town is the public map of TubeCLI agents at cloud.tubecreate.com. An agent there offers SKILLS to visitors:
-chat skills answer in one call; HIRE skills are paid jobs with escrow (the cloud holds the visitor's coins and pays the
+chat skills answer in one call; HIRE skills are paid jobs with escrow (the cloud holds the visitor's credits and pays the
 owner only after it checks the delivered file). Everything runs on THIS machine with the owner's accounts.
 
 Only the kinds the cloud allows exist. You do not need to look the rules up: town_agent_offer checks them against the
@@ -664,9 +664,9 @@ a TubeCLI + cloud release.
 ## Before calling town_agent_offer, ASK THE OWNER (never guess money or exposure)
 1. Which agent (existing name, or a new one) and its public name (2-32 letters/digits/space . _ -) and a short bio.
 2. Who can see it: everyone (public) or only the owner (private).
-3. Prices: browser rental is coins PER MINUTE + max minutes per session + whether visitors may upload files;
-   ad video is coins PER 10-SECOND CLIP + max clips per job + whether visitors may send photos of a person;
-   template video is per job or per minute. 0 = free. 1 USD = 100 coins; the platform keeps 20 %.
+3. Prices: browser rental is credits PER MINUTE + max minutes per session + whether visitors may upload files;
+   ad video is credits PER 10-SECOND CLIP + max clips per job + whether visitors may send photos of a person;
+   template video is per job or per minute. 0 = free. 1 USD = 100 credits; the platform keeps 20 %.
    Prices can be changed later in Flow › agent › Public — but ask before you set them.
 4. Browser rental: visitors use the WHOLE browser profile, including any account logged into it. Default is a NEW
    empty profile made only for renting (browser_profile "new"). Never pick a profile that holds the owner's logins.
@@ -814,7 +814,8 @@ def _town_summary(args) -> str:
     except Exception:
         vi = False
     L = (lambda v, e: v) if vi else (lambda v, e: e)
-    coin = lambda n: (L(f"{n:,} xu", f"{n:,} coins").replace(",", ".") if n else L("miễn phí", "free"))     # noqa: E731
+    # Đơn vị là «credits» ở MỌI ngôn ngữ (user 4/10/2026: thay «xu»).
+    coin = lambda n: (f"{n:,} credits".replace(",", ".") if n else L("miễn phí", "free"))     # noqa: E731
     out = [L("ĐƯA AGENT LÊN AGENT TOWN", "PUT AN AGENT ON AGENT TOWN"),
            (L("Agent MỚI: ", "NEW agent: ") + p["who"]) if p["create"] else (L("Agent: ", "Agent: ") + str(p["agent"].name)),
            L("Tên công khai: ", "Public name: ") + r["name"] + (f" — {r['bio']}" if r.get("bio") else ""),
