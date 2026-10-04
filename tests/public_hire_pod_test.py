@@ -143,6 +143,10 @@ check("giọng khách chọn (3/10/2026 tối): kiểu kẹp theo bộ Pod, gi�
       and ph._jobs["podv00000000"]["voice_gender"] == "female" and ph._jobs["podv00000000"]["voice_custom"] == "hơi khàn"
       and ph._jobs["podv00000000"]["voices"] == [{"gender": "male", "voice_custom": "x" * 200}, {"voice": "sweet"}], ph._jobs["podv00000000"])
 check("không chọn giọng → không có khoá", "voice" not in j and "voices" not in j)
+check("loại nội dung (4/10/2026): drama giữ, rác → rỗng (theo mẫu)",
+      rc({**base, "job": "podf00000000", "format": "DRAMA"}) == {"ok": True, "job": "podf00000000"}
+      and ph._jobs["podf00000000"]["format"] == "drama" and rc({**base, "job": "podf00000001", "format": "sitcom"}) == {"ok": True, "job": "podf00000001"}
+      and ph._jobs["podf00000001"]["format"] == "" and j["format"] == "")
 check("quá trần clip của chủ → bad_clips", rc({**base, "job": "pod333333333", "clips": 7}) == "bad_clips")
 check("0 clip → bad_clips", rc({**base, "job": "pod333333334", "clips": 0}) == "bad_clips")
 check("mẫu agent không phục vụ → template_missing", rc({**base, "job": "pod444444444", "preset": "Edo"}) == "template_missing")
@@ -206,7 +210,7 @@ async def run_fast(code):
 
 
 reports.clear()
-ph._jobs["pod111111111"].update(scene="rainy neon Tokyo", character="silver hair", voice="warm", voices=[{"gender": "male"}])
+ph._jobs["pod111111111"].update(scene="rainy neon Tokyo", character="silver hair", voice="warm", voices=[{"gender": "male"}], format="short")
 job = asyncio.run(run_fast("pod111111111"))
 path, body = posted[0]
 check("xếp task Pod: route run, KHÔNG nhãn AI (chủ dự án bỏ 3/10/2026), origin mã việc, mẫu + số clip + ảnh sản phẩm, người mẫu để mẫu lo",
@@ -217,6 +221,7 @@ check("tuỳ biến của khách xuống Pod là scene_custom / character_custom
       body["scene_custom"] == "rainy neon Tokyo" and body["character_custom"] == "silver hair", body)
 check("giọng khách xuống Pod: voice + voices[]", body["voice"] == "warm" and body["voices"] == [{"gender": "male"}]
       and "voice_gender" not in body, body)
+check("loại nội dung xuống Pod: format=short", body["format"] == "short", body)
 ready = [r for r in reports if r["status"] == "ready"]
 check("giao: báo ready kèm file + 30 s; sổ việc giữ đường dẫn video",
       ready and ready[0]["seconds"] == 30 and ready[0]["files"][0]["name"] == "video-quang-cao-pod111111111.mp4"

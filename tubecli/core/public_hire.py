@@ -334,6 +334,9 @@ async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any]
     character = " ".join(str(payload.get("character") or "").split())[:300]
     # Giọng khách chọn (3/10/2026 tối): kiểu giọng, giới, mô tả — chung cả đơn + theo từng ảnh người mẫu (voices[])
     voice = _voice_fields(payload)
+    # Loại nội dung (4/10/2026): quảng cáo / video ngắn / drama — trống = theo mẫu
+    fmt = str(payload.get("format") or "").strip().lower()
+    fmt = fmt if fmt in ("ad", "short", "drama") else ""
     async with _lock:
         if code in _jobs:            # cloud gọi lại (mạng chớp) — không mở việc thứ hai
             return {"ok": True, "job": code}
@@ -343,7 +346,7 @@ async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any]
                "unit": "clip", "clips": clips, "price": int(payload.get("price") or 0),
                "models": models, "products": products, "consent": bool(raw_models),
                "ratio": ratio if ratio in ("9:16", "16:9", "1:1") else "", "scene": scene, "character": character,
-               **voice,
+               "format": fmt, **voice,
                "status": "accepted", "task_id": "", "files": [], "paths": [], "seconds": 0, "at": time.time()}
         _jobs[code] = job
         _save(job)
@@ -457,7 +460,7 @@ async def _run_pod(code: str) -> None:
             body["scene_custom"] = job["scene"]
         if job.get("character"):
             body["character_custom"] = job["character"]
-        for k in ("voice", "voice_gender", "voice_custom", "voices"):
+        for k in ("voice", "voice_gender", "voice_custom", "voices", "format"):
             if job.get(k):
                 body[k] = job[k]
         try:
