@@ -1090,15 +1090,9 @@ class FileService:
     _ALIGN_TO_STR = {0: "left", 1: "center", 2: "right", 3: "justify"}
     _STR_TO_ALIGN = {"left": 0, "center": 1, "right": 2, "justify": 3}
 
-    def read_doc(self, path: str) -> Dict[str, Any]:
-        """Đọc .docx thành các đoạn kèm style, căn lề, cỡ chữ, đậm/nghiêng/gạch chân."""
-        safe_path = self._validate_path(path)
-        if not os.path.isfile(safe_path):
-            raise FileNotFoundError(f"File không tồn tại: {path}")
-        from docx import Document
-        doc = Document(safe_path)
-
-        def _base_pt(p):
+    def _doc_para_props(self, doc, p) -> Dict[str, Any]:
+        """Thuộc tính một đoạn đúng như read_doc trả ra — write_doc so với chính nó để biết đoạn nào ĐỔI."""
+        def _base_pt():
             """Cỡ chữ của đoạn: ưu tiên run có chữ, rồi tới style, rồi mặc định của tài liệu."""
             for r in p.runs:
                 if r.text.strip() and r.font.size is not None:
@@ -1116,59 +1110,210 @@ class FileService:
                 pass
             return None
 
-        paras = []
-        for p in doc.paragraphs:
-            style = (p.style.name if p.style is not None else "") or "Normal"
-            marked = [r for r in p.runs if r.text.strip()]
-            align = p.alignment
-            if align is None:                       # kế thừa từ style của đoạn
-                try:
-                    align = p.style.paragraph_format.alignment
-                except Exception:
-                    align = None
-            paras.append({
-                "text": p.text,
-                "style": style,
-                # Đậm/nghiêng/gạch chân ở mức ĐOẠN (đủ cho trình sửa nhẹ).
-                "bold": bool(marked and all(r.bold for r in marked)),
-                "italic": bool(marked and all(r.italic for r in marked)),
-                "underline": bool(marked and all(r.underline for r in marked)),
-                "align": self._ALIGN_TO_STR.get(int(align), "left") if align is not None else None,
-                "size": _base_pt(p),
-            })
-        return {"paragraphs": paras, "path": safe_path}
+        style = (p.style.name if p.style is not None else "") or "Normal"
+        marked = [r for r in p.runs if r.text.strip()]
+        align = p.alignment
+        if align is None:                       # kế thừa từ style của đoạn
+            try:
+                align = p.style.paragraph_format.alignment
+            except Exception:
+                align = None
+        return {
+            "text": p.text,
+            "style": style,
+            # Đậm/nghiêng/gạch chân ở mức ĐOẠN (đủ cho trình sửa nhẹ).
+            "bold": bool(marked and all(r.bold for r in marked)),
+            "italic": bool(marked and all(r.italic for r in marked)),
+            "underline": bool(marked and all(r.underline for r in marked)),
+            "align": self._ALIGN_TO_STR.get(int(align), "left") if align is not None else None,
+            "size": _base_pt(),
+        }
+
+    def read_doc(self, path: str) -> Dict[str, Any]:
+        """Đọc .docx thành các đoạn kèm style, căn lề, cỡ chữ, đậm/nghiêng/gạch chân."""
+        safe_path = self._validate_path(path)
+        if not os.path.isfile(safe_path):
+            raise FileNotFoundError(f"File không tồn tại: {path}")
+        from docx import Document
+        doc = Document(safe_path)
+        return {"paragraphs": [self._doc_para_props(doc, p) for p in doc.paragraphs], "path": safe_path}
+
+    # Phần tử trong một run mà đổi chữ KHÔNG được đụng tới (ảnh, trường, ký tự đặc biệt…).
+    _RUN_TEXT_TAGS = ("rPr", "t", "tab", "br", "cr", "noBreakHyphen", "softHyphen")
+
+    @staticmethod
+    def _para_runs(p) -> list:
+        """Mọi run của đoạn theo đúng thứ tự, KỂ CẢ run nằm trong liên kết — p.text (python-docx ≥ 1.0) gồm cả chữ
+        trong link, nên chia chữ theo run mà bỏ sót link là lệch vị trí."""
+        try:
+            from docx.text.hyperlink import Hyperlink
+            out = []
+            for item in p.iter_inner_content():
+                if isinstance(item, Hyperlink):
+                    out.extend(item.runs)
+                else:
+                    out.append(item)
+            return out
+        except (ImportError, AttributeError):
+            return list(p.runs)
+
+    def _set_run_text(self, run, text: str) -> None:
+        """Đổi chữ một run. Run chỉ có chữ → run.text (\t → w:tab, \n → w:br). Run lẫn ảnh/trường → chỉ thay các
+        nút chữ, giữ nguyên phần còn lại."""
+        from docx.oxml.ns import qn
+        el = run._r
+        kinds = {c.tag.split("}")[-1] for c in el}
+        if kinds <= set(self._RUN_TEXT_TAGS):
+            run.text = text
+            return
+        nodes = [c for c in el if c.tag.split("}")[-1] in ("t", "tab", "br", "cr")]
+        for c in nodes[1:]:
+            el.remove(c)
+        if nodes and nodes[0].tag == qn("w:t"):
+            nodes[0].text = text
+        else:
+            if nodes:
+                el.remove(nodes[0])
+            from docx.oxml import OxmlElement
+            t = OxmlElement("w:t")
+            t.text = text
+            el.append(t)
+        for c in el:
+            if c.tag == qn("w:t"):
+                c.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+
+    def _replace_para_text(self, p, new: str) -> bool:
+        """Đổi chữ đoạn bằng hiệu NHỎ NHẤT: giữ nguyên đầu + đuôi chung, chỉ thay khúc giữa trong đúng run chứa nó →
+        phần không đổi giữ nguyên định dạng (đậm «1.1.» + thân thường không bị gộp thành một kiểu). False = phải
+        dùng đường dự phòng (gộp vào run đầu) vì chữ ghép từ run không khớp p.text (trường, smart tag…)."""
+        old = p.text
+        if old == new:
+            return True
+        runs = self._para_runs(p)
+        texts = [r.text for r in runs]
+        if "".join(texts) != old or not runs:
+            return False
+        a = 0
+        while a < len(old) and a < len(new) and old[a] == new[a]:
+            a += 1
+        b = 0
+        while b < len(old) - a and b < len(new) - a and old[-1 - b] == new[-1 - b]:
+            b += 1
+        cut_end, mid = len(old) - b, new[a:len(new) - b]
+        starts, pos = [], 0
+        for t in texts:
+            starts.append(pos)
+            pos += len(t)
+
+        def run_at(ch):
+            """Run (có chữ) chứa ký tự thứ ch."""
+            for i, t in enumerate(texts):
+                if t and starts[i] <= ch < starts[i] + len(t):
+                    return i
+            return None
+
+        # Run nhận khúc chèn: có xoá → run chứa ký tự đầu bị xoá; chèn thuần tuý → ăn theo ký tự đứng TRƯỚC (gõ
+        # tiếp cuối chữ đậm thì vẫn đậm, như Word); chèn ở đầu đoạn → run có chữ đầu tiên.
+        if a < cut_end:
+            host = run_at(a)
+        else:
+            host = run_at(a - 1) if a > 0 else run_at(0)
+        if host is None:
+            host = 0
+        new_texts = []
+        for i, t in enumerate(texts):
+            head = t[:max(0, min(len(t), a - starts[i]))]
+            tail = t[max(0, min(len(t), cut_end - starts[i])):]
+            new_texts.append(head + (mid if i == host else "") + tail)
+        for r, t_old, t_new in zip(runs, texts, new_texts):
+            if t_new != t_old:
+                self._set_run_text(r, t_new)
+        return p.text == new
 
     def write_doc(self, path: str, paragraphs: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Ghi lại .docx từ danh sách đoạn (style, căn lề, cỡ chữ, đậm/nghiêng/gạch chân)."""
+        """Lưu trình sửa đoạn văn (node file trên Flow) VÀO CHÍNH FILE GỐC: chỉ đổi thứ người dùng đã đổi.
+
+        Bản cũ dựng `Document()` mới rồi đắp đoạn vào → mở rồi Lưu là mất bảng, ảnh, header/footer, lề trang, style
+        riêng và định dạng trộn trong đoạn (đo 4/10/2026). Nay: mở file gốc, so từng đoạn với đúng thứ read_doc đã
+        trả, đoạn nào đổi chữ thì thay hiệu nhỏ nhất theo run, đổi kiểu/căn lề/đậm/cỡ thì chỉ đặt thuộc tính ĐÓ.
+        Đoạn mới (thêm cuối) nối sau cùng thân bài. KHÔNG xoá đoạn nào: client gửi thiếu đoạn thì phần thừa giữ nguyên.
+        File chưa tồn tại thì tạo mới như cũ."""
         safe_path = self._validate_path(path)
         from docx import Document
         from docx.shared import Pt
-        doc = Document()
-        for p in (paragraphs or []):
-            style = str(p.get("style") or "Normal")
-            text = "" if p.get("text") is None else str(p.get("text"))
+        fresh = not os.path.isfile(safe_path)
+        doc = Document() if fresh else Document(safe_path)
+        body = [] if fresh else list(doc.paragraphs)
+        stats = {"changed": 0, "added": 0, "runs_merged": 0}
+
+        def _text_runs(para):
+            return [r for r in self._para_runs(para) if r.text.strip()] or list(para.runs)
+
+        for i, p in enumerate(paragraphs or []):
+            want_text = "" if p.get("text") is None else str(p.get("text"))
+            if i < len(body):
+                para = body[i]
+                old = self._doc_para_props(doc, para)
+                touched = False
+                if want_text != old["text"]:
+                    if not self._replace_para_text(para, want_text):
+                        rs = list(para.runs)
+                        if rs:
+                            self._set_run_text(rs[0], want_text)
+                            for r in rs[1:]:
+                                if r.text:
+                                    self._set_run_text(r, "")
+                        else:
+                            para.add_run(want_text)
+                        stats["runs_merged"] += 1
+                    touched = True
+                style = str(p.get("style") or "")
+                if style and style != old["style"]:
+                    try:
+                        para.style = doc.styles[style]
+                        touched = True
+                    except KeyError:
+                        pass                            # style không có trong file → giữ style cũ
+                al = p.get("align")
+                if al in self._STR_TO_ALIGN and al != old["align"]:
+                    para.alignment = self._STR_TO_ALIGN[al]
+                    touched = True
+                for key in ("bold", "italic", "underline"):
+                    if key in p and bool(p.get(key)) != bool(old[key]):
+                        for r in _text_runs(para):
+                            setattr(r, key, bool(p.get(key)))
+                        touched = True
+                try:
+                    if p.get("size") and (old["size"] is None or abs(float(p["size"]) - float(old["size"])) > 0.05):
+                        for r in _text_runs(para):
+                            r.font.size = Pt(float(p["size"]))
+                        touched = True
+                except (TypeError, ValueError):
+                    pass
+                stats["changed"] += int(touched)
+                continue
+            # Đoạn thêm mới: nối cuối thân bài (python-docx tự đặt trước sectPr → lề/khổ giấy giữ nguyên).
             try:
-                para = doc.add_paragraph(style=style)
-            except Exception:
-                para = doc.add_paragraph()   # style lạ (file gốc dùng style riêng) → dùng mặc định
+                para = doc.add_paragraph(style=str(p.get("style") or "Normal"))
+            except KeyError:
+                para = doc.add_paragraph()
             al = p.get("align")
             if al in self._STR_TO_ALIGN:
                 para.alignment = self._STR_TO_ALIGN[al]
-            run = para.add_run(text)
-            if p.get("bold"):
-                run.bold = True
-            if p.get("italic"):
-                run.italic = True
-            if p.get("underline"):
-                run.underline = True
+            run = para.add_run(want_text)
+            for key in ("bold", "italic", "underline"):
+                if p.get(key):
+                    setattr(run, key, True)
             try:
                 if p.get("size"):
                     run.font.size = Pt(float(p["size"]))
-            except Exception:
+            except (TypeError, ValueError):
                 pass
+            stats["added"] += 1
         doc.save(safe_path)
         size = os.path.getsize(safe_path)
-        return {"status": "saved", "path": safe_path, "size": size, "size_human": self._human_size(size)}
+        return {"status": "saved", "path": safe_path, "size": size, "size_human": self._human_size(size),
+                "in_place": not fresh, **stats}
 
     def get_allowed_roots(self) -> List[Dict[str, str]]:
         """Return list of quick-access root directories for the UI.
