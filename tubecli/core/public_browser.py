@@ -42,6 +42,7 @@ import secrets
 import time
 from typing import Any, Dict, List, Optional
 
+from tubecli.core import browser_rentals as rentals
 from tubecli.core.public_agents import PublicSkillError
 
 logger = logging.getLogger("public_browser")
@@ -49,8 +50,8 @@ logger = logging.getLogger("public_browser")
 _SESSION_RE = re.compile(r"^[a-f0-9]{16}$")
 _PROFILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 OWNER_SESSION_SEC = 2 * 3600       # chủ tự dùng: đủ đẩy một video lớn qua tunnel rồi lên YouTube
-# Tiền tố hồ sơ SẠCH do khách yêu cầu — hết phiên là xoá. Tiền tố riêng để quét được cái mồ côi.
-FRESH_PREFIX = "rent_"
+# Tiền tố hồ sơ do KHÁCH tạo — xem core/browser_rentals.py (sổ ai-là-chủ, giữ tới bao giờ).
+FRESH_PREFIX = rentals.PREFIX
 # Hồ sơ sạch mồ côi (máy tắt giữa phiên) quá mức này thì dọn — kẻo đĩa phình dần.
 FRESH_STALE_SEC = 6 * 3600
 
@@ -90,8 +91,15 @@ def _agent_live(agent_id: str) -> List[Dict[str, Any]]:
 
 
 def _drop_fresh_profile(name: str) -> None:
-    """Xoá hồ sơ SẠCH sau khi browser đã tắt (còn chạy thì Windows giữ file)."""
-    if not str(name).startswith(FRESH_PREFIX):
+    """Xoá hồ sơ khách tạo sau khi browser đã tắt (còn chạy thì Windows giữ file).
+
+    Hồ sơ GIỮ LÂU DÀI (có dòng trong sổ, chưa hết hạn) thì KHÔNG xoá — khách đã trả phí giữ
+    để thuê lại chính nó."""
+    if not rentals.is_rental(name):
+        return
+    r = rentals.get(name)
+    if r and float(r.get("until") or 0) > time.time():
+        logger.info("[browser.remote] giữ hồ sơ %s tới %.0f (khách đã trả phí giữ)", name, r["until"])
         return
     try:
         from tubecli.extensions.browser.profile_manager import delete_profile
@@ -102,19 +110,31 @@ def _drop_fresh_profile(name: str) -> None:
 
 
 def _sweep_fresh() -> None:
-    """Dọn hồ sơ sạch mồ côi: máy tắt giữa phiên thì sổ _sessions mất, hồ sơ còn trên đĩa."""
+    """Dọn hồ sơ khách tạo đã hết việc:
+      · hết HẠN GIỮ → xoá hồ sơ + bỏ dòng trong sổ (khách không gia hạn nữa);
+      · mồ côi (máy tắt giữa phiên nên sổ _sessions mất) và cũ hơn FRESH_STALE_SEC → xoá.
+    """
     try:
-        from tubecli.extensions.browser.profile_manager import PROFILES_DIR
+        from tubecli.extensions.browser.profile_manager import PROFILES_DIR, delete_profile
         live = {s["profile"] for s in _sessions.values()}
+        for name in rentals.expired():
+            if name in live:
+                continue
+            rentals.drop(name)                  # bỏ dòng TRƯỚC để _drop_fresh_profile chịu xoá
+            try:
+                delete_profile(name)
+                logger.info("[browser.remote] hết hạn giữ, đã xoá hồ sơ %s", name)
+            except Exception as e:      # noqa: BLE001
+                logger.warning("[browser.remote] xoá hồ sơ hết hạn %s hỏng: %s", name, e)
         now = time.time()
         for name in os.listdir(PROFILES_DIR):
-            if not name.startswith(FRESH_PREFIX) or name in live:
+            if not rentals.is_rental(name) or name in live or rentals.get(name):
                 continue
             path = os.path.join(PROFILES_DIR, name)
             if os.path.isdir(path) and now - os.path.getmtime(path) > FRESH_STALE_SEC:
                 _drop_fresh_profile(name)
     except Exception as e:      # noqa: BLE001 — dọn rác không được làm chết lượt gọi
-        logger.debug("[browser.remote] quét hồ sơ sạch hỏng: %s", e)
+        logger.debug("[browser.remote] quét hồ sơ khách tạo hỏng: %s", e)
 
 
 async def _end(sid: str) -> None:
@@ -159,9 +179,13 @@ async def _expire_later(sid: str, secs: float) -> None:
 
 
 def _live(s: Dict[str, Any], token: str) -> Dict[str, Any]:
-    return {"kind": "browserlive", "session": s["sid"], "token": token, "port": s["port"],
-            "profile": s["profile"], "fresh": bool(s.get("fresh")),
-            "expires_in": max(0, int(s["exp"] - time.time())), "upload": s["upload"]}
+    out = {"kind": "browserlive", "session": s["sid"], "token": token, "port": s["port"],
+           "profile": s["profile"], "fresh": bool(s.get("fresh")),
+           "expires_in": max(0, int(s["exp"] - time.time())), "upload": s["upload"],
+           "label": rentals.label_of(s["profile"]) if rentals.is_rental(s["profile"]) else ""}
+    if s.get("keep_until"):
+        out["keep_until"] = int(s["keep_until"])
+    return out
 
 
 def _rentable(st: Dict[str, Any]) -> List[str]:
@@ -175,15 +199,28 @@ def _rentable(st: Dict[str, Any]) -> List[str]:
     return names
 
 
-def _capacity(agent_id: str, st: Dict[str, Any]) -> Dict[str, Any]:
-    """Còn mấy chỗ, hồ sơ nào rảnh, bao lâu nữa có chỗ. Không mở gì cả."""
+def _capacity(agent_id: str, st: Dict[str, Any], caller: str = "") -> Dict[str, Any]:
+    """Còn mấy chỗ, hồ sơ nào rảnh, bao lâu nữa có chỗ. Không mở gì cả.
+
+    Danh sách hồ sơ = hồ sơ CHỦ mở cho thuê + hồ sơ GIỮ LÂU DÀI của ĐÚNG người gọi này. Hồ sơ
+    của khách khác không bao giờ xuất hiện (user 4/10: «chỉ họ mới xem được»).
+    """
     from tubecli.extensions.browser.routes import public_browser_capacity
 
-    cap = public_browser_capacity(_rentable(st))
+    mine_kept = rentals.owned_by(caller) if caller else []
+    cap = public_browser_capacity(_rentable(st) + [k["name"] for k in mine_kept])
     mine = _agent_live(agent_id)
     busy_names = {s["profile"] for s in mine}
-    rows = [{"name": p["name"], "busy": bool(p["busy"]) or p["name"] in busy_names}
-            for p in cap["profiles"]]
+    kept = {k["name"]: k for k in mine_kept}
+    rows = []
+    for p in cap["profiles"]:
+        row = {"name": p["name"], "busy": bool(p["busy"]) or p["name"] in busy_names}
+        k = kept.get(p["name"])
+        if k:
+            # Hồ sơ của chính khách: bày NHÃN họ đặt, kèm mốc hết hạn giữ để họ biết khi nào
+            # phải gia hạn.
+            row.update({"mine": True, "label": k["label"], "keep_until": int(k["until"])})
+        rows.append(row)
     slots_max = max(1, min(8, int(st.get("browser_slots") or 1)))
     ram = cap.get("ram_slots")
     # Trần thật = thấp nhất trong ba thứ: chủ cho phép, RAM mở nổi (RAM CÒN TRỐNG đã trừ phiên
@@ -198,25 +235,31 @@ def _capacity(agent_id: str, st: Dict[str, Any]) -> Dict[str, Any]:
     if free <= 0 and mine:
         nxt = max(0, int(min(s["exp"] for s in mine) - time.time()))
     return {"kind": "browserinfo", "profiles": rows, "can_create": fresh_on,
+            "kept": len(mine_kept), "kept_max": rentals.KEEP_PER_CALLER_MAX,
             "slots": {"free": free, "max": max(room, len(mine)), "used": len(mine),
                       "next_free_in": nxt},
             "ram_free_mb": cap.get("ram_free_mb"), "session_mb": cap.get("session_mb")}
 
 
-async def _make_fresh() -> str:
-    """Tạo hồ sơ trống để cho thuê. Nhân ShardX phải có sẵn (máy đã từng tạo hồ sơ) — tải nhân
-    là việc hàng trăm MB, không làm trong một lượt gọi của khách."""
+async def _make_fresh(caller: str, label: str = "") -> str:
+    """Tạo hồ sơ trống cho khách, tên gồm mã người gọi + nhãn họ đặt (core/browser_rentals).
+
+    Nhân ShardX phải có sẵn (máy đã từng tạo hồ sơ) — tải nhân là việc hàng trăm MB, không làm
+    trong một lượt gọi của khách."""
     from tubecli.extensions.browser.profile_manager import create_profile
 
-    for _ in range(5):
-        name = f"{FRESH_PREFIX}{secrets.token_hex(5)}"
+    base = rentals.dir_name(caller, label)
+    for i in range(5):
+        name = base if i == 0 else f"{base[:56]}-{secrets.token_hex(2)}"
+        if not rentals.valid_name(name):
+            raise PublicSkillError("bad_input")
         try:
             await asyncio.to_thread(create_profile, name)
             return name
-        except ValueError:      # trùng tên (gần như không xảy ra) → thử tên khác
+        except ValueError:      # trùng tên → thêm hậu tố rồi thử lại
             continue
         except Exception as e:      # noqa: BLE001
-            logger.warning("[browser.remote] tạo hồ sơ sạch hỏng: %s", e)
+            logger.warning("[browser.remote] tạo hồ sơ cho khách hỏng: %s", e)
             raise PublicSkillError("browser_failed", status=502)
     raise PublicSkillError("browser_failed", status=502)
 
@@ -242,7 +285,8 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
 
     if action == "info":
         async with _lock:
-            return _capacity(agent_id, st)
+            _sweep_fresh()
+            return _capacity(agent_id, st, caller)
 
     if action == "stop":
         sid = str(req.get("session") or "")
@@ -265,12 +309,17 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
             tok = auth.mint_guest_token(s["scope"], max(60, int(s["exp"] - time.time())))
             return _live(s, tok["guest_token"])
 
-        # Hồ sơ khách chọn phải có trong danh sách CHO THUÊ — kiểm TRƯỚC cổng quá tải, kẻo
-        # bấm sai hồ sơ lại nhận câu «máy đủ tải» và cứ ngồi chờ một chỗ không bao giờ dùng được.
-        if want and want not in rentable:
+        # Hồ sơ khách chọn phải là hồ sơ CHỦ cho thuê, hoặc hồ sơ GIỮ LÂU DÀI của CHÍNH
+        # người gọi. Kiểm TRƯỚC cổng quá tải, kẻo bấm sai hồ sơ lại nhận câu «máy đủ tải» và
+        # cứ ngồi chờ một chỗ không bao giờ dùng được.
+        #
+        # RIÊNG TƯ: hồ sơ thuê của người KHÁC trả browser_unavailable y như hồ sơ không tồn
+        # tại — không được để ai dò ra rằng cái tên đó có thật trên máy này.
+        mine_kept = {k["name"] for k in rentals.owned_by(caller)}
+        if want and want not in rentable and want not in mine_kept:
             raise PublicSkillError("browser_unavailable", status=404)
         _sweep_fresh()
-        cap = _capacity(agent_id, st)
+        cap = _capacity(agent_id, st, caller)
         if cap["slots"]["free"] <= 0:
             # Hai lý do khác nhau, phải nói khác nhau:
             #   · mọi hồ sơ cho thuê ĐANG CÓ NGƯỜI dùng (và không tạo được hồ sơ sạch) →
@@ -285,9 +334,20 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
             raise PublicSkillError(code, status=429)
 
         fresh = req.get("fresh") is True and cap["can_create"]
+        # Giữ lâu dài: cloud đã thu phí giữ và gửi xuống số NGÀY. 0/không gửi = thuê 1 lần,
+        # hết phiên là xoá hồ sơ.
+        try:
+            keep_days = int(req.get("keep_days") or 0)
+        except (TypeError, ValueError):
+            keep_days = 0
+        keep_days = max(0, min(365, keep_days))
+        label = str(req.get("name") or "")
         busy = {r["name"] for r in cap["profiles"] if r["busy"]}
         if fresh:
-            profile = await _make_fresh()
+            # Trần hồ sơ giữ mỗi khách: chặn một người chiếm hết đĩa của chủ.
+            if keep_days > 0 and rentals.count_for(caller) >= rentals.KEEP_PER_CALLER_MAX:
+                raise PublicSkillError("browser_keep_full", status=409)
+            profile = await _make_fresh(caller, label)
         elif want:
             if want in busy:
                 raise PublicSkillError("browser_busy", status=429)
@@ -298,7 +358,7 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
             if free:
                 profile = free[0]
             elif cap["can_create"]:
-                profile, fresh = await _make_fresh(), True
+                profile, fresh = await _make_fresh(caller, label), True
             else:
                 raise PublicSkillError("browser_busy", status=429)
 
@@ -354,6 +414,15 @@ async def resolve(text: str, opts: Optional[Dict[str, Any]] = None) -> Dict[str,
              "scope": scope, "upload": upload, "fresh": bool(fresh)}
         s["task"] = asyncio.create_task(_expire_later(sid, ttl))
         _sessions[sid] = s
+        # Giữ lâu dài: ghi sổ NGAY (không chờ hết phiên) — máy tắt giữa phiên thì hồ sơ vẫn
+        # được giữ, đúng thứ khách đã trả tiền cho.
+        if keep_days > 0 and rentals.is_rental(profile):
+            try:
+                until = rentals.keep(profile, caller, keep_days, label)
+                s["keep_until"] = until
+                logger.info("[browser.remote] giữ hồ sơ %s cho %s thêm %d ngày", profile, caller[:8], keep_days)
+            except Exception as e:      # noqa: BLE001 — không giữ được thì vẫn cho dùng phiên
+                logger.warning("[browser.remote] ghi sổ giữ hồ sơ hỏng: %s", e)
         logger.info("[browser.remote] mở phiên %s cho agent %s trên %s (%d phút%s)",
                     sid, agent_id, profile, minutes, ", hồ sơ sạch" if fresh else "")
         return _live(s, tok["guest_token"])

@@ -53,6 +53,17 @@ class PublicAgentSettings(BaseModel):
     browser_upload: Optional[str] = None
     # Giá thuê trình duyệt, xu/phút (0 = miễn phí). browser_minutes là TRẦN mỗi phiên.
     browser_price: Optional[int] = None
+    # Bản 4/10/2026: NHIỀU hồ sơ cho thuê (lưới cho khách chọn trên Town), bán theo PHIÊN cố
+    # định, số phiên song song, cho khách tạo hồ sơ sạch. PHẢI khai ở đây: pydantic BỎ LẶNG
+    # trường lạ, nên thiếu một dòng là Flow lưu mà không có tác dụng gì (test canh bên dưới).
+    browser_profiles: Optional[List[str]] = None
+    browser_mode: Optional[str] = None
+    browser_session_minutes: Optional[int] = None
+    browser_slots: Optional[int] = None
+    browser_fresh: Optional[bool] = None
+    # Giữ hồ sơ lâu dài: phí giữ MỘT LẦN (0 = không cho giữ) + số ngày mỗi lần giữ.
+    browser_keep_price: Optional[int] = None
+    browser_keep_days: Optional[int] = None
     # Nhận việc THUÊ từ Chợ mẫu (làm video từ mẫu của máy): bật/tắt, giá (xu), kiểu tính
     # (job = trọn gói | minute = theo phút), trần phút, danh sách TÊN mẫu phục vụ.
     hire_on: Optional[bool] = None

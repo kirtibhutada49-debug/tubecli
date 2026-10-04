@@ -290,6 +290,10 @@ BROWSER_MODES = ("minute", "session")
 # Phiên cố định dài hơn trần của chế độ phút (60) — bán "nửa ngày" được.
 BROWSER_SESSION_MINUTES = (30, 5, 240)
 BROWSER_SLOTS_MAX = 8            # = BROWSER_SLOTS_MAX của cloud (lib/publicAgents.js)
+# GIỮ HỒ SƠ LÂU DÀI (user 4/10/2026): khách trả phí giữ MỘT LẦN, hồ sơ sống thêm N ngày, thuê
+# lại thì gia hạn. Chọn trả-một-lần thay vì trừ-mỗi-ngày để không có cảnh ví cạn giữa đêm rồi
+# mất hồ sơ lúc không để ý. 0 = KHÔNG cho giữ (chỉ thuê 1 lần, hết phiên là mất).
+BROWSER_KEEP_DAYS = (7, 1, 90)
 BROWSER_PROFILES_MAX = 12        # = BROWSER_PROFILES_MAX của cloud
 
 
@@ -348,6 +352,17 @@ def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any
         fresh = bool(raw.get("browser_fresh"))
     else:
         fresh = bool(old.get("browser_fresh"))
+    kd, klo, khi = BROWSER_KEEP_DAYS
+    try:
+        keep_days = int(raw.get("browser_keep_days") if raw.get("browser_keep_days") not in (None, "")
+                        else old.get("browser_keep_days") or kd)
+    except (TypeError, ValueError):
+        keep_days = kd
+    try:
+        keep_price = int(raw.get("browser_keep_price") if raw.get("browser_keep_price") not in (None, "")
+                         else old.get("browser_keep_price") or 0)
+    except (TypeError, ValueError):
+        keep_price = 0
     # browser_minutes = TRẦN mỗi phiên; khi có giá, khách chọn số phút ≤ trần (cloud giữ tiền theo nó).
     return {"browser_profile": bp, "browser_minutes": max(lo, min(hi, mins)),
             "browser_upload": up if up in BROWSER_UPLOADS else BROWSER_UPLOADS[0],
@@ -355,7 +370,9 @@ def _browser_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any
             "browser_mode": mode if mode in BROWSER_MODES else BROWSER_MODES[0],
             "browser_session_minutes": max(slo, min(shi, smins)),
             "browser_slots": max(1, min(BROWSER_SLOTS_MAX, slots)),
-            "browser_profiles": profiles, "browser_fresh": fresh}
+            "browser_profiles": profiles, "browser_fresh": fresh,
+            "browser_keep_days": max(klo, min(khi, keep_days)),
+            "browser_keep_price": max(0, min(BROWSER_PRICE_MAX, keep_price))}
 
 
 HIRE_UNITS = ("job", "minute")
@@ -515,7 +532,8 @@ def local_town_rules() -> Dict[str, Any]:
                 "templates_max": HIRE_POD_TEMPLATES_MAX, "models_max": 3, "products_max": 2, "ai_label": True},
         "browser": {"price_max": BROWSER_PRICE_MAX, "unit": "minute", "minutes": [lo, hi],
                     "modes": list(BROWSER_MODES), "session_minutes": list(BROWSER_SESSION_MINUTES[1:]),
-                    "slots": [1, BROWSER_SLOTS_MAX], "profiles_max": BROWSER_PROFILES_MAX, "fresh": True},
+                    "slots": [1, BROWSER_SLOTS_MAX], "profiles_max": BROWSER_PROFILES_MAX, "fresh": True,
+                    "keep_days": list(BROWSER_KEEP_DAYS[1:])},
         "office": {"price_max": HIRE_PRICE_MAX, "unit": "page", "pages_max": HIRE_OFFICE_PAGES_MAX},
     }
 
@@ -735,7 +753,12 @@ def _profile_row(entry: Dict[str, Any], load: Optional[Dict[str, float]] = None)
                           "mode": mode if mode in BROWSER_MODES else BROWSER_MODES[0],
                           "session_minutes": max(slo, min(shi, int(st.get("browser_session_minutes") or sd))),
                           "slots": max(1, min(BROWSER_SLOTS_MAX, int(st.get("browser_slots") or 1))),
-                          "fresh": bool(st.get("browser_fresh")), "profiles": names}
+                          "fresh": bool(st.get("browser_fresh")), "profiles": names,
+                          # Giữ hồ sơ lâu dài: giá giữ MỘT LẦN + số ngày mỗi lần giữ.
+                          # keep_price = 0 ⇒ cloud không bày lựa chọn giữ (chỉ thuê 1 lần).
+                          "keep_price": max(0, min(BROWSER_PRICE_MAX, int(st.get("browser_keep_price") or 0))),
+                          "keep_days": max(BROWSER_KEEP_DAYS[1], min(BROWSER_KEEP_DAYS[2],
+                                                                     int(st.get("browser_keep_days") or BROWSER_KEEP_DAYS[0])))}
     return row
 
 
@@ -977,7 +1000,8 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "browser_profile", "browser_minutes", "browser_upload",
                 # 4/10: lưới nhiều hồ sơ, hồ sơ sạch tạo theo yêu cầu, số chỗ chạy song song
                 "browser_profiles", "browser_fresh", "browser_slots",
-                "browser_mode", "browser_session_minutes")}
+                "browser_mode", "browser_session_minutes",
+                "browser_keep_days", "browser_keep_price")}
         result = await asyncio.wait_for(skill.handler(text, opts), timeout=INVOKE_TIMEOUT_SEC)
         ok = True
         return result

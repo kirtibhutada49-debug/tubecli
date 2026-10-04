@@ -452,7 +452,8 @@ _row = pa._profile_row(_ent)
 # chủ TỰ TICK (browser_profiles). Hai luật thay cho luật «không bao giờ rời máy» cũ:
 check("hồ sơ đẩy mang khối browser đủ cách tính tiền + số chỗ",
       _row.get("browser") == {"price": 120, "minutes_max": 30, "mode": "minute", "session_minutes": 30,
-                              "slots": 1, "fresh": False, "profiles": []}, _row)
+                              "slots": 1, "fresh": False, "profiles": [],
+                              "keep_price": 0, "keep_days": 7}, _row)
 check("chủ dùng bản CŨ (chỉ browser_profile) → tên hồ sơ KHÔNG lên Town",
       "shared" not in str(_row), _row)
 _ent_g = {"agent_id": "A7", "hash": "d" * 16,
@@ -593,6 +594,85 @@ _nf = asyncio.run(_start("B1", "u1", _MULTI, fresh=True))
 check("chủ tắt hồ sơ sạch → xin fresh vẫn ra hồ sơ thường, không tạo gì",
       _made == [] and _nf["profile"] in ("p1", "p2") and _nf.get("fresh") is False, (_made, _nf.get("profile")))
 _reset_sessions()
+
+# -- 12. Ho so khach tao: tu dat ten, RIENG TU, giu lau dai ------------------
+# User 4/10/2026: «profile nguoi dung tao chi co ho moi xem duoc nguoi khac khong xem duoc»
+# va «thue lau dai co the giu session do de thue lai (them phi duy tri) con thue 1 lan thi
+# het phien la mat».
+import time as _time  # noqa: E402
+from tubecli.core import browser_rentals as _rt  # noqa: E402
+
+_rt._path = lambda: os.path.join(_tmp, "browser_rentals.json")
+_cap["can_create"] = True
+_KEEP = {**_MULTI, "browser_fresh": True, "browser_slots": 4}
+_made.clear()
+_killed.clear()
+_reset_sessions()
+
+# Ten khach dat di vao ten thu muc, kem ma nguoi goi (hai khach dat cung ten khong trung)
+_k1 = asyncio.run(_start("C1", "aaaa1111", _KEEP, fresh=True, name="shop cua toi!", keep_days=7))
+check("ten khach dat -> ten thu muc an toan, co ma nguoi goi",
+      _k1["profile"].startswith("rent_aaaa1111_") and "shop-cua-toi" in _k1["profile"], _k1.get("profile"))
+check("...va tra ve NHAN de bay cho khach", _k1.get("label") == "shop-cua-toi", _k1.get("label"))
+check("...kem moc het han giu", int(_k1.get("keep_until") or 0) > int(_time.time()) + 6 * 86400)
+_k2 = asyncio.run(_start("C1", "bbbb2222", _KEEP, fresh=True, name="shop cua toi!", keep_days=7))
+check("hai khach dat CUNG ten -> hai thu muc khac nhau",
+      _k2["profile"] != _k1["profile"] and _k2["profile"].startswith("rent_bbbb2222_"), _k2.get("profile"))
+
+# RIENG TU: info cua nguoi khac KHONG thay ho so nay
+_i1 = asyncio.run(pb.resolve(json.dumps({"action": "info"}),
+                             {"_agent_id": "C1", "_caller": "aaaa1111", "_settings": _KEEP}))
+_i3 = asyncio.run(pb.resolve(json.dumps({"action": "info"}),
+                             {"_agent_id": "C1", "_caller": "cccc3333", "_settings": _KEEP}))
+_names1 = [p["name"] for p in _i1["profiles"]]
+_names3 = [p["name"] for p in _i3["profiles"]]
+check("chu ho so thay ho so cua minh trong luoi", _k1["profile"] in _names1, _names1)
+check("NGUOI KHAC khong thay ho so do", _k1["profile"] not in _names3 and _k2["profile"] not in _names3, _names3)
+check("...va thay ho so cua CHU agent", "p1" in _names3 and "p2" in _names3, _names3)
+_mine = [p for p in _i1["profiles"] if p["name"] == _k1["profile"]][0]
+check("the ho so rieng mang co mine + nhan + moc giu",
+      _mine.get("mine") is True and _mine.get("label") == "shop-cua-toi" and _mine.get("keep_until", 0) > 0, _mine)
+
+# Nguoi khac XIN MO ho so cua minh -> browser_unavailable (khong duoc de ho do ra la co that)
+check("nguoi khac xin mo ho so cua minh -> browser_unavailable (khong lo ten co that)",
+      _code(_start("C1", "cccc3333", _KEEP, profile=_k1["profile"])) == "browser_unavailable")
+
+# Het phien: ho so GIU LAU DAI khong bi xoa; thue 1 lan thi xoa
+_killed.clear()
+asyncio.run(pb._end(_k1["session"]))
+check("het phien, ho so GIU LAU DAI khong bi xoa", _killed == [], _killed)
+_once = asyncio.run(_start("C1", "dddd4444", _KEEP, fresh=True, name="thu-1-lan"))
+_killed.clear()
+asyncio.run(pb._end(_once["session"]))
+check("thue 1 LAN (khong keep_days) -> het phien la xoa ho so",
+      _killed == [_once["profile"]], _killed)
+
+# Gia han: thue lai CONG TU MOC CU, khong mat phan ngay da tra
+_u1 = _rt.get(_k1["profile"])["until"]
+_rt.keep(_k1["profile"], "aaaa1111", 7)
+check("thue lai som -> gia han CONG vao moc cu (khong mat ngay da tra)",
+      _rt.get(_k1["profile"])["until"] >= _u1 + 7 * 86400 - 2, (_u1, _rt.get(_k1["profile"])["until"]))
+
+# Tran so ho so GIU moi khach
+_rt.keep("rent_eeee5555_a", "eeee5555", 7)
+_rt.keep("rent_eeee5555_b", "eeee5555", 7)
+_rt.keep("rent_eeee5555_c", "eeee5555", 7)
+check("du tran ho so giu -> browser_keep_full",
+      _code(_start("C1", "eeee5555", _KEEP, fresh=True, keep_days=7)) == "browser_keep_full")
+check("...nhung thue 1 LAN thi van duoc (khong chiem dia lau dai)",
+      asyncio.run(_start("C1", "eeee5555", _KEEP, fresh=True)).get("kind") == "browserlive")
+_reset_sessions()
+
+# -- 11. Cong luu cai dat phai nhan DU truong browser_* ----------------------
+# pydantic BO LANG truong la: thieu mot dong trong PublicAgentSettings la Flow gui len, cong
+# vut di, chu tick ho so xong tuong da luu ma khong co tac dung gi. Loi nay da xay ra that
+# ngay 4/10/2026 (ban dau cua luoi ho so). So THEO CAU TRUC de truong moi cung khong lot.
+from tubecli.api.public_routes import PublicAgentSettings  # noqa: E402
+
+_stored = set(pa._browser_settings({}, {}).keys())
+_model = set(getattr(PublicAgentSettings, "model_fields", None) or PublicAgentSettings.__fields__)
+_missing = sorted(_stored - _model)
+check("cong PUT nhan du moi truong browser_* ma normalise luu", not _missing, _missing)
 
 shutil.rmtree(_tmp, ignore_errors=True)
 print(f"\n{passed} pass, {failed} fail")
