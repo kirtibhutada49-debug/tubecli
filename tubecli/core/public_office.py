@@ -35,6 +35,15 @@ logger = logging.getLogger("public_office")
 
 FILE_MAX = 12 * 1024 * 1024          # sau giải mã — thân lệnh của cổng hire ≤ 16 MB (base64 phình 4/3)
 QUOTE_TTL = 2 * 3600
+# Zip của .docx là thứ NGƯỜI LẠ gửi: chặn bom nén TRƯỚC khi python-docx/LibreOffice bung ra RAM. Cỡ khai trong đầu zip
+# là trần thật — zipfile đọc tới đúng cỡ khai rồi kiểm CRC, khai láo nhỏ hơn thì nổ BadZipFile.
+ZIP_ENTRIES_MAX = 2000
+ZIP_TOTAL_MAX = 150 * 1024 * 1024
+ZIP_PART_MAX = 80 * 1024 * 1024
+# Báo giá cất file 2 giờ: một người gọi liên tục sẽ lấp đầy ổ đĩa máy agent → mỗi người gọi giữ ≤ 3 file, cả máy ≤ 60.
+QUOTES_PER_CALLER = 3
+QUOTES_MAX = 60
+_WIN_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _QID_RE = re.compile(r"^[a-f0-9]{16}$")
 _skill_mod = None
@@ -110,7 +119,9 @@ def _root(*parts: str) -> str:
 
 def _clean_name(name: str) -> str:
     base = os.path.basename(str(name or "")).strip() or "van-ban.docx"
-    stem = re.sub(r"[^\w\-. ]+", "", os.path.splitext(base)[0], flags=re.U).strip()[:80] or "van-ban"
+    stem = re.sub(r"[^\w\-. ]+", "", os.path.splitext(base)[0], flags=re.U).strip(" .")[:80] or "van-ban"
+    if stem.split(".")[0].lower() in _WIN_RESERVED:      # «CON.docx» trên Windows là THIẾT BỊ, không phải file
+        stem = "_" + stem
     return stem + ".docx"
 
 
@@ -127,11 +138,24 @@ def _decode_docx(b64: Any) -> bytes:
         raise PublicSkillError("bad_file", status=422)
     if len(raw) > FILE_MAX:
         raise PublicSkillError("file_too_large", status=413)
+    # Đổi đuôi .exe/.pdf/.doc thành .docx → không phải zip → bad_file. Zip thật thì còn phải là Word THƯỜNG:
+    # có [Content_Types].xml khai phần chính là wordprocessingml, không macro (.docm đổi đuôi), không mã hoá, không bom nén.
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as z:
-            if "word/document.xml" not in z.namelist():
+            infos = z.infolist()
+            names = {i.filename for i in infos}
+            if len(infos) > ZIP_ENTRIES_MAX or "word/document.xml" not in names or "[Content_Types].xml" not in names:
                 raise PublicSkillError("bad_file", status=422)
-    except zipfile.BadZipFile:
+            if sum(i.file_size for i in infos) > ZIP_TOTAL_MAX or any(i.file_size > ZIP_PART_MAX for i in infos):
+                raise PublicSkillError("file_too_large", status=413)
+            if any(i.flag_bits & 0x1 for i in infos):                       # mục mã hoá
+                raise PublicSkillError("bad_file", status=422)
+            if any(n.lower().endswith("vbaproject.bin") for n in names):
+                raise PublicSkillError("bad_file", status=422)
+            ct = z.read("[Content_Types].xml").decode("utf-8", "replace")
+            if "wordprocessingml.document.main+xml" not in ct or "macroEnabled" in ct:
+                raise PublicSkillError("bad_file", status=422)
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError, OSError, ValueError, RuntimeError):
         raise PublicSkillError("bad_file", status=422)
     return raw
 
@@ -145,16 +169,36 @@ def _settings(entry: Dict[str, Any]) -> Dict[str, Any]:
     return st
 
 
-def _sweep_quotes() -> None:
+def _sweep_quotes(caller: str = "") -> None:
+    """Xoá báo giá quá hạn; người gọi này đã giữ đủ QUOTES_PER_CALLER thì bỏ cái CŨ NHẤT của họ; cả máy vẫn đầy
+    QUOTES_MAX thì từ chối (agent_busy) — không để báo giá lấp đầy ổ đĩa."""
     d = _root("quotes")
     now = time.time()
+    metas = []
     for f in os.listdir(d):
         p = os.path.join(d, f)
         try:
             if now - os.path.getmtime(p) > QUOTE_TTL:
                 os.remove(p)
-        except OSError:
+            elif f.endswith(".json"):
+                with open(p, encoding="utf-8") as fh:
+                    metas.append((f[:-5], json.load(fh)))
+        except (OSError, ValueError):
             pass
+
+    def drop(qid: str) -> None:
+        for ext in (".docx", ".json"):
+            try:
+                os.remove(os.path.join(d, qid + ext))
+            except OSError:
+                pass
+    if caller:
+        mine = sorted((m.get("at") or 0, q) for q, m in metas if m.get("caller") == caller)
+        for _, q in mine[:max(0, len(mine) - QUOTES_PER_CALLER + 1)]:
+            drop(q)
+            metas = [(x, m) for x, m in metas if x != q]
+    if len(metas) >= QUOTES_MAX:
+        raise PublicSkillError("agent_busy", status=429)
 
 
 async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -171,7 +215,8 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
 async def quote(payload: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]:
     st = _settings(entry)
     raw = _decode_docx(payload.get("file"))
-    _sweep_quotes()
+    caller = re.sub(r"[^0-9a-f]", "", str(payload.get("caller") or ""))[:32]
+    _sweep_quotes(caller)
     qid = secrets.token_hex(8)
     d = _root("quotes")
     path = os.path.join(d, qid + ".docx")
@@ -186,7 +231,7 @@ async def quote(payload: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any
     pages = max(1, int(counted.get("pages") or 1))
     pmax = int(st.get("hire_office_pages_max") or 50)
     meta = {"agent": entry["hash"], "name": _clean_name(payload.get("name")), "pages": pages,
-            "method": str(counted.get("method") or "estimate"), "at": time.time()}
+            "method": str(counted.get("method") or "estimate"), "at": time.time(), "caller": caller}
     with open(os.path.join(d, qid + ".json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False)
     out = {"ok": True, "quote": qid, "pages": pages, "method": meta["method"], "exact": meta["method"] != "estimate",
@@ -290,9 +335,11 @@ async def run(code: str) -> None:
         H._save(job)
         logger.info("[office-hire] %s giao xong (%s trang) → cloud nói %s", code, job["pages"], out)
     except Exception as e:      # noqa: BLE001 — lỗi nào cũng phải báo để khách được hoàn
-        logger.warning("[office-hire] %s hỏng: %s", code, e)
+        logger.warning("[office-hire] %s hỏng: %s", code, e, exc_info=True)
         try:
-            await asyncio.to_thread(_report, code, {"status": "failed", "err": "job_failed"})
+            # «format_failed»: Town nói đúng là KHÔNG ĐỊNH DẠNG ĐƯỢC FILE (trước đó dùng job_failed → khách đọc «máy hỏng
+            # khi làm video»). Chi tiết kỹ thuật chỉ ở nhật ký máy, không gửi người lạ.
+            await asyncio.to_thread(_report, code, {"status": "failed", "err": "format_failed"})
         except Exception:      # noqa: BLE001
             pass
         job["status"] = "failed"

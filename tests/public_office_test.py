@@ -149,6 +149,119 @@ async def main():
           on_row.get("hire_office", {}).get("on") is True and on_row["hire_office"]["price"] == 30
           and "office.docx" in on_row["skills"]
           and off_row.get("hire_office") == {"on": False} and "office.docx" not in off_row["skills"], (on_row, off_row))
+    # ── Rà bảo mật đường nhận file (user 4/10/2026: «upfile không đúng chuẩn mà chỉ đổi đuôi») ─────────────
+    async def quote_raw(data, name="x.docx", caller=""):
+        return await code_of(public_hire.receive({"skill": "office.docx", "step": "quote", "agent": "h_agent_1",
+                                                  "name": name, "caller": caller,
+                                                  "file": base64.b64encode(data).decode()}))
+    check("20 PDF / exe đổi đuôi .docx → bad_file",
+          await quote_raw(b"%PDF-1.7\n%\xe2\xe3\n1 0 obj") == "bad_file"
+          and await quote_raw(b"MZ\x90\x00" + b"\x00" * 64) == "bad_file")
+
+    def rezip(src, drop=(), add=None, ct_sub=None):
+        out = io.BytesIO()
+        with zipfile.ZipFile(src) as zi, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zo:
+            for it in zi.infolist():
+                if it.filename in drop:
+                    continue
+                data = zi.read(it)
+                if ct_sub and it.filename == "[Content_Types].xml":
+                    data = data.decode().replace(*ct_sub).encode()
+                zo.writestr(it, data)
+            for k, v in (add or {}).items():
+                zo.writestr(k, v)
+        return out.getvalue()
+    docm = rezip(S["bao_cao"][0], add={"word/vbaProject.bin": b"\xd0\xcf\x11\xe0macro"},
+                 ct_sub=("wordprocessingml.document.main+xml", "ms-word.document.macroEnabled.main+xml"))
+    check("21 .docm (có macro) đổi đuôi .docx → bad_file", await quote_raw(docm) == "bad_file")
+    check("22 thiếu [Content_Types].xml → bad_file", await quote_raw(rezip(S["bao_cao"][0], drop=("[Content_Types].xml",))) == "bad_file")
+    old_max = public_office.ZIP_PART_MAX
+    public_office.ZIP_PART_MAX = 2000
+    try:
+        check("23 bom nén (phần bung ra quá trần) → file_too_large, chưa đụng python-docx", await quote_raw(raw) == "file_too_large")
+    finally:
+        public_office.ZIP_PART_MAX = old_max
+    check("24 tên thiết bị Windows (CON/NUL/COM1) không thành tên file thật",
+          public_office._clean_name("CON.docx") == "_CON.docx" and public_office._clean_name("nul.tar.docx") == "_nul.tar.docx"
+          and public_office._clean_name("..\\..\\x.docx") == "x.docx" and public_office._clean_name("...docx") != "...docx")
+    qs = []
+    for _ in range(4):
+        r4 = await public_hire.receive({"skill": "office.docx", "step": "quote", "agent": "h_agent_1", "name": "a.docx",
+                                        "caller": "abc123", "file": b64})
+        qs.append(r4["quote"])
+    left = [q for q in qs if os.path.isfile(TMP / "quotes" / (q + ".docx"))]
+    check("25 một người gọi giữ tối đa 3 báo giá — cái cũ nhất bị bỏ", left == qs[1:], (qs, left))
+    old_q = public_office.QUOTES_MAX
+    public_office.QUOTES_MAX = len(os.listdir(TMP / "quotes")) // 2
+    try:
+        check("26 cả máy đầy báo giá → agent_busy (không lấp đầy ổ đĩa)", await quote_raw(raw, caller="ffff") == "agent_busy")
+    finally:
+        public_office.QUOTES_MAX = old_q
+
+    # LibreOffice chỉ được dựng BẢN SAO đã gỡ thứ trỏ ra ngoài
+    lo = public_office._skill().lo
+    evil = rezip(S["bao_cao"][0])
+    with zipfile.ZipFile(io.BytesIO(evil)) as z:
+        rels = z.read("word/_rels/document.xml.rels").decode()
+        docx_xml = z.read("word/document.xml").decode()
+    rels = rels.replace("</Relationships>",
+        '<Relationship Id="rIdEvil" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+        'Target="file://\\\\evil.example\\share\\x.png" TargetMode="External"/>'
+        '<Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+        'Target="https://example.com/" TargetMode="External"/></Relationships>')
+    field = ('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> INCLUDETEXT '
+             '"C:\\\\secret.txt" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+             '<w:p><w:fldSimple w:instr=" DDEAUTO cmd /c calc "><w:r><w:t>x</w:t></w:r></w:fldSimple></w:p>'
+             '<w:altChunk r:id="rIdEvil"/>')
+    docx_xml = docx_xml.replace("<w:body>", "<w:body>" + field, 1)
+    src_evil = TMP / "evil.docx"
+    src_evil.write_bytes(rezip(io.BytesIO(evil), drop=("word/_rels/document.xml.rels", "word/document.xml"),
+                               add={"word/_rels/document.xml.rels": rels, "word/document.xml": docx_xml}))
+    safe = TMP / "safe.docx"
+    st = lo.render_copy(str(src_evil), str(safe))
+    with zipfile.ZipFile(safe) as z:
+        srels = z.read("word/_rels/document.xml.rels").decode()
+        sdoc = z.read("word/document.xml").decode()
+    check("27 bản sao cho LibreOffice: liên kết ngoài → about:blank (giữ link bấm được), bỏ INCLUDETEXT/DDEAUTO + altChunk",
+          st["external"] == 1 and st["fields"] == 2 and st["altchunk"] == 1 and "evil.example" not in srels
+          and "https://example.com/" in srels and "INCLUDETEXT" not in sdoc and "DDEAUTO" not in sdoc
+          and "altChunk" not in sdoc, (st, srels[-400:]))
+
+    # Định dạng hỏng → báo «format_failed», không phải «job_failed» (Town từng ghi «máy hỏng khi làm video»)
+    REPORTS.clear()
+    real_fmt = public_office._skill().format_docx
+    public_office._skill().format_docx = lambda *a, **k: (_ for _ in ()).throw(KeyError("no style with name 'Normal'"))
+    try:
+        q3 = await public_hire.receive({"skill": "office.docx", "step": "quote", "agent": "h_agent_1", "name": "b.docx", "file": b64})
+        await public_hire.receive({"skill": "office.docx", "job": "job000000002", "agent": "h_agent_1",
+                                   "quote": q3["quote"], "minutes": q3["pages"]})
+        end = time.time() + 20
+        while time.time() < end and not any(b.get("status") == "failed" for b in REPORTS):
+            await asyncio.sleep(0.1)
+    finally:
+        public_office._skill().format_docx = real_fmt
+    failed = [b for b in REPORTS if b.get("status") == "failed"]
+    check("28 định dạng hỏng → báo cloud err=format_failed, không lộ chi tiết kỹ thuật",
+          failed and failed[0]["err"] == "format_failed" and "note" not in failed[0], REPORTS)
+
+    # File thiếu kiểu «Normal» (xuất từ công cụ khác Word) — việc thuê đầu tiên trên Town hỏng vì nó
+    nonorm = TMP / "nonormal.docx"
+    with zipfile.ZipFile(S["bao_cao"][0]) as z:
+        sty = z.read("word/styles.xml").decode()
+    import re as _re
+    sty2 = _re.sub(r'<w:style\b[^>]*w:styleId="Normal"[^>]*>.*?</w:style>', "", sty, flags=_re.S)
+    nonorm.write_bytes(rezip(S["bao_cao"][0], drop=("word/styles.xml",), add={"word/styles.xml": sty2}))
+    from docx import Document as _D
+    try:
+        _D(str(nonorm)).styles["Normal"]
+        had = True
+    except KeyError:
+        had = False
+    res = public_office._skill().format_docx(str(nonorm), None, {"size": 13.0})
+    dn = _D(res["output"])
+    check("29 file KHÔNG có kiểu «Normal» vẫn chuẩn hoá được (tạo Normal làm mặc định)",
+          not had and abs(dn.styles["Normal"].font.size.pt - 13) < .1, had)
+
     models = public_office.ai_models()
     check("19 danh sách model cho ô chọn: [{provider, models[]}] (máy không có cloud_api thì rỗng, không nổ)",
           isinstance(models, list) and all(isinstance(g.get("provider"), str) and isinstance(g.get("models"), list)
