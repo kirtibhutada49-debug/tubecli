@@ -33,6 +33,11 @@ PREFIX = "rent_"
 LABEL_MAX = 24
 # Trần số hồ sơ GIỮ LÂU DÀI mỗi khách trên một máy — chặn một người chiếm hết đĩa của chủ.
 KEEP_PER_CALLER_MAX = 3
+# ÂN HẠN sau khi hết hạn giữ (user 4/10/2026: «có thêm cơ chế gia hạn, nếu quá 24h không gia
+# hạn thì xoá vĩnh viễn»). Trong cửa sổ này hồ sơ vẫn còn trên đĩa và khách gia hạn được; quá
+# thì xoá hẳn, không lấy lại được. Có ân hạn vì hết hạn lúc 3 giờ sáng mà mất luôn dữ liệu
+# đăng nhập thì quá phũ.
+GRACE_SEC = 24 * 3600
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -100,21 +105,29 @@ def get(name: str) -> Optional[Dict[str, Any]]:
 
 
 def owned_by(caller: str, now: Optional[float] = None) -> List[Dict[str, Any]]:
-    """Hồ sơ GIỮ LÂU DÀI còn hiệu lực của ĐÚNG người gọi này — không ai khác thấy."""
+    """Hồ sơ GIỮ LÂU DÀI của ĐÚNG người gọi này — không ai khác thấy.
+
+    Gồm cả hồ sơ ĐÃ HẾT HẠN còn trong ân hạn 24 giờ (`expired: True`): phải thấy mới gia hạn
+    được. Quá ân hạn thì không trả nữa — nó sắp bị bộ quét xoá.
+    """
     t = time.time() if now is None else now
     out = []
     for name, r in sorted(_load().items()):
         if not isinstance(r, dict) or str(r.get("caller") or "") != str(caller):
             continue
-        if float(r.get("until") or 0) <= t:
+        until = float(r.get("until") or 0)
+        if until + GRACE_SEC <= t:
             continue
         out.append({"name": name, "label": str(r.get("label") or label_of(name)),
-                    "until": float(r.get("until") or 0)})
+                    "until": until, "expired": until <= t,
+                    "grace_left": max(0, int(until + GRACE_SEC - t)) if until <= t else 0})
     return out
 
 
 def count_for(caller: str, now: Optional[float] = None) -> int:
-    return len(owned_by(caller, now))
+    """Chỉ đếm hồ sơ CÒN HIỆU LỰC vào trần — hồ sơ đang trong ân hạn sắp bị xoá, không nên
+    vì nó mà chặn khách giữ hồ sơ mới."""
+    return sum(1 for r in owned_by(caller, now) if not r["expired"])
 
 
 def keep(name: str, caller: str, days: int, label: str = "", now: Optional[float] = None) -> float:
@@ -139,10 +152,10 @@ def drop(name: str) -> None:
 
 
 def expired(now: Optional[float] = None) -> List[str]:
-    """Hồ sơ hết hạn giữ — bộ quét của public_browser xoá cả thư mục."""
+    """Hồ sơ hết hạn VÀ hết luôn ân hạn 24 giờ — bộ quét xoá cả thư mục, không lấy lại được."""
     t = time.time() if now is None else now
     return [n for n, r in _load().items()
-            if isinstance(r, dict) and float(r.get("until") or 0) <= t]
+            if isinstance(r, dict) and float(r.get("until") or 0) + GRACE_SEC <= t]
 
 
 def valid_name(name: str) -> bool:

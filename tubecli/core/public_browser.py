@@ -98,8 +98,9 @@ def _drop_fresh_profile(name: str) -> None:
     if not rentals.is_rental(name):
         return
     r = rentals.get(name)
-    if r and float(r.get("until") or 0) > time.time():
-        logger.info("[browser.remote] giữ hồ sơ %s tới %.0f (khách đã trả phí giữ)", name, r["until"])
+    if r and float(r.get("until") or 0) + rentals.GRACE_SEC > time.time():
+        # Còn hạn giữ, HOẶC đã hết hạn nhưng còn trong ân hạn 24 giờ để gia hạn.
+        logger.info("[browser.remote] giữ hồ sơ %s tới %.0f (+ân hạn)", name, r["until"])
         return
     try:
         from tubecli.extensions.browser.profile_manager import delete_profile
@@ -218,8 +219,10 @@ def _capacity(agent_id: str, st: Dict[str, Any], caller: str = "") -> Dict[str, 
         k = kept.get(p["name"])
         if k:
             # Hồ sơ của chính khách: bày NHÃN họ đặt, kèm mốc hết hạn giữ để họ biết khi nào
-            # phải gia hạn.
-            row.update({"mine": True, "label": k["label"], "keep_until": int(k["until"])})
+            # phải gia hạn. `expired` + `grace_left` = đã hết hạn, còn bấy nhiêu giây để gia
+            # hạn trước khi xoá vĩnh viễn.
+            row.update({"mine": True, "label": k["label"], "keep_until": int(k["until"]),
+                        "expired": bool(k["expired"]), "grace_left": int(k["grace_left"])})
         rows.append(row)
     slots_max = max(1, min(8, int(st.get("browser_slots") or 1)))
     ram = cap.get("ram_slots")
