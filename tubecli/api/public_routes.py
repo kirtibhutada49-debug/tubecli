@@ -67,6 +67,11 @@ class PublicAgentSettings(BaseModel):
     hire_pod_clips_max: Optional[int] = None
     hire_pod_models: Optional[bool] = None
     hire_pod_templates: Optional[List[str]] = None
+    # Chuẩn hoá Word theo NĐ 30 (office.docx, 4/10/2026): credits MỖI TRANG, trần trang/việc, model AI (rỗng = chỉ luật).
+    hire_office_on: Optional[bool] = None
+    hire_office_price: Optional[int] = None
+    hire_office_pages_max: Optional[int] = None
+    hire_office_model: Optional[str] = None
 
 
 @router.get("/api/v1/public-agents")
@@ -100,6 +105,8 @@ async def list_public_agents(request: Request):
         "pod_templates": public_agents.pod_template_cards(
             [t.get("name") for t in _shared_templates() if "ref_video" in (t.get("sections") or {})]),
         "pod_clips_max": public_agents.HIRE_POD_CLIPS_MAX,
+        # Skill chuẩn hoá Word (office.docx): máy có extension Office Editor không, đếm trang thật hay ước tính.
+        "office": public_agents.office_status(),
     }
 
 

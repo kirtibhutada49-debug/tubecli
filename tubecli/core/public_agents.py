@@ -237,7 +237,8 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
     # HOẶC video quảng cáo từ ảnh của Pod Studio).
     _hire_on_now = raw.get("hire_on") if "hire_on" in raw else (old or {}).get("hire_on")
     _pod_on_now = raw.get("hire_pod_on") if "hire_pod_on" in raw else (old or {}).get("hire_pod_on")
-    if enabled and not skills and not _hire_on_now and not _pod_on_now:
+    _office_on_now = raw.get("hire_office_on") if "hire_office_on" in raw else (old or {}).get("hire_office_on")
+    if enabled and not skills and not _hire_on_now and not _pod_on_now and not _office_on_now:
         raise ValueError("no_skills")
     # Không gửi trường → giữ nguyên thứ đang lưu (mặc định cho agent mới là công khai).
     # Gửi chữ lạ → công khai, KHÔNG đoán là riêng tư: đoán sai kiểu đó làm agent đang
@@ -267,6 +268,7 @@ def normalise(raw: Dict[str, Any], agent_name: str = "", old: Optional[Dict[str,
     out.update(_browser_settings(raw, old or {}))
     out.update(_hire_settings(raw, old or {}))
     out.update(_hire_pod_settings(raw, old or {}))
+    out.update(_hire_office_settings(raw, old or {}))
     if enabled and "browser.remote" in skills and not out["browser_profile"]:
         raise ValueError("no_browser_profile")
     return out
@@ -383,6 +385,39 @@ def _hire_pod_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, An
             "hire_pod_models": models, "hire_pod_templates": names}
 
 
+# Chuẩn hoá Word theo NĐ 30 (skill thuê «office.docx», 4/10/2026): giá credits MỖI TRANG (trang của file khách gửi, báo
+# giá trước), trần số trang/việc, model AI nhận diện khối (rỗng = chỉ luật — nhanh, không tốn token).
+HIRE_OFFICE_PAGES_MAX = 300      # = OFFICE_PAGES_MAX của cloud (lib/hire.js)
+HIRE_OFFICE_PAGES_DEFAULT = 50
+
+
+def _hire_office_settings(raw: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
+    on = bool(raw.get("hire_office_on")) if "hire_office_on" in raw else bool(old.get("hire_office_on"))
+
+    def num(k, dflt):
+        v = raw.get(k) if k in raw else old.get(k, dflt)
+        try:
+            return int(v if v not in (None, "") else dflt)
+        except (TypeError, ValueError):
+            return dflt
+    model = str((raw.get("hire_office_model") if "hire_office_model" in raw else old.get("hire_office_model")) or "")
+    model = model.strip()[:80] if re.match(r"^[\w./:@+-]*$", model.strip()) else ""
+    return {"hire_office_on": on, "hire_office_price": max(0, min(HIRE_PRICE_MAX, num("hire_office_price", 0))),
+            "hire_office_pages_max": max(1, min(HIRE_OFFICE_PAGES_MAX, num("hire_office_pages_max", HIRE_OFFICE_PAGES_DEFAULT))),
+            "hire_office_model": model}
+
+
+def office_status() -> Dict[str, Any]:
+    """Máy có làm được skill office.docx không + đếm trang thật (LibreOffice) hay ước tính — tab Công khai bày ra."""
+    try:
+        from tubecli.core import public_office
+        ok = public_office.available()
+        return {"available": ok, "exact": public_office.exact_pages() if ok else False,
+                "pages_max": HIRE_OFFICE_PAGES_MAX}
+    except Exception:      # noqa: BLE001
+        return {"available": False, "exact": False, "pages_max": HIRE_OFFICE_PAGES_MAX}
+
+
 def pod_template_cards(names: List[str]) -> List[Dict[str, Any]]:
     """Mẫu Pod agent phục vụ → thẻ gọn đẩy lên Town: {n tên, s kiểu hình, r khung hình, k số clip, f thể loại,
     m có người mẫu mặc định}. Mẫu không còn trong kho chung thì bỏ (chủ xoá mẫu mà quên gỡ khỏi danh sách)."""
@@ -421,7 +456,8 @@ def local_town_rules() -> Dict[str, Any]:
         "source": "local", "version": 1,
         "skills": [{"id": s.id, "kind": "chat", "house": s.extension} for s in PUBLIC_SKILLS.values()]
                   + [{"id": "content.video", "kind": "hire", "house": "con_st"},
-                     {"id": "pod.video", "kind": "hire", "house": "pod_studio"}],
+                     {"id": "pod.video", "kind": "hire", "house": "pod_studio"},
+                     {"id": "office.docx", "kind": "hire", "house": "office_editor"}],
         "agent": {"name_min": 2, "name_max": 32, "bio_max": 160, "per_machine_max": 20, "daily_cap": [1, MAX_DAILY_CAP],
                   "visibility": list(VISIBILITIES), "online_window_sec": 300},
         "hire": {"price_max": HIRE_PRICE_MAX, "units": list(HIRE_UNITS), "minutes_max": HIRE_MINUTES_MAX,
@@ -429,6 +465,7 @@ def local_town_rules() -> Dict[str, Any]:
         "pod": {"price_max": HIRE_PRICE_MAX, "unit": "clip", "clips_max": HIRE_POD_CLIPS_MAX,
                 "templates_max": HIRE_POD_TEMPLATES_MAX, "models_max": 3, "products_max": 2, "ai_label": True},
         "browser": {"price_max": BROWSER_PRICE_MAX, "unit": "minute", "minutes": [lo, hi]},
+        "office": {"price_max": HIRE_PRICE_MAX, "unit": "page", "pages_max": HIRE_OFFICE_PAGES_MAX},
     }
 
 
@@ -551,7 +588,7 @@ def public_entries() -> List[Dict[str, Any]]:
             continue
         skills = [s for s in st.get("skills") or [] if s in PUBLIC_SKILLS]
         if not skills and not (st.get("hire_on") and st.get("hire_presets")) \
-                and not (st.get("hire_pod_on") and st.get("hire_pod_templates")):
+                and not (st.get("hire_pod_on") and st.get("hire_pod_templates")) and not st.get("hire_office_on"):
             continue
         out.append({"agent_id": aid, "hash": agent_hash(aid), "settings": {**st, "skills": skills}})
     return out
@@ -619,6 +656,17 @@ def _profile_row(entry: Dict[str, Any], load: Optional[Dict[str, float]] = None)
                 skills.append("pod.video")
     elif "hire_pod_on" in st:
         row["hire_pod"] = {"on": False}
+    # Chuẩn hoá Word theo NĐ 30 (office.docx): giá credits/TRANG + trần trang + đếm thật (LibreOffice) hay ước tính.
+    # Máy mất extension Office Editor mà chủ vẫn bật → gửi dấu TẮT tường minh, kẻo cloud giữ biển «nhận việc».
+    ost = office_status() if st.get("hire_office_on") else None
+    if ost and ost["available"]:
+        row["hire_office"] = {"on": True, "price": int(st.get("hire_office_price") or 0),
+                              "pages_max": int(st.get("hire_office_pages_max") or HIRE_OFFICE_PAGES_DEFAULT),
+                              "exact": bool(ost["exact"])}
+        if "office.docx" not in skills:
+            skills.append("office.docx")
+    elif "hire_office_on" in st:
+        row["hire_office"] = {"on": False}
     if "browser.remote" in skills:
         # Giá thuê trình duyệt (xu/phút) + trần phút/phiên: cloud hiện cho khách chọn số phút, GIỮ
         # tiền theo đó rồi chốt theo phút thực. Tên hồ sơ trình duyệt KHÔNG bao giờ rời máy.

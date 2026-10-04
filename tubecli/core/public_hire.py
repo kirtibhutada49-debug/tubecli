@@ -167,6 +167,10 @@ async def receive(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if not isinstance(payload, dict):
         raise PublicSkillError("bad_request", status=400)
+    if str(payload.get("skill") or "") == "office.docx":
+        # Chuẩn hoá Word theo NĐ 30, tính THEO TRANG (báo giá trước) — logic ở core/public_office.py.
+        from tubecli.core import public_office
+        return await public_office.receive(payload)
     code = str(payload.get("job") or "")
     h = str(payload.get("agent") or "")
     preset = " ".join(str(payload.get("preset") or "").split())[:80]
@@ -532,6 +536,9 @@ async def _run(code: str) -> None:
     job = _jobs.get(code)
     if not job:
         return
+    if job.get("kind") == "office":
+        from tubecli.core import public_office
+        return await public_office.run(code)
     if job.get("kind") == "pod":
         try:
             await _run_pod(code)

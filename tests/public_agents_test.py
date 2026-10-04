@@ -124,9 +124,11 @@ row = pa._profile_row(entries[0])
 # {'on': False} — cloud cần dấu TẮT tường minh: thiếu khối nghĩa là «giữ nguyên thứ đang
 # lưu», chủ tắt nhận việc mà cloud vẫn treo biển thuê). Chi tiết ở public_hire_test.py.
 # «hire_pod» (video quảng cáo từ ảnh, 3/10/2026) cùng luật: dấu TẮT tường minh — public_hire_pod_test.py.
-check("hồ sơ chỉ gồm a/name/bio/skills/cap/warn/par/tired/vis/hire/hire_pod — không id thật, không tên agent gốc",
-      set(row) == {"a", "name", "bio", "skills", "cap", "warn", "par", "tired", "vis", "hire", "hire_pod"}
+# «hire_office» (chuẩn hoá Word NĐ 30 theo trang, 4/10/2026) cùng luật — public_office_test.py.
+check("hồ sơ chỉ gồm a/name/bio/skills/cap/warn/par/tired/vis/hire/hire_pod/hire_office — không id thật, không tên agent gốc",
+      set(row) == {"a", "name", "bio", "skills", "cap", "warn", "par", "tired", "vis", "hire", "hire_pod", "hire_office"}
       and row["hire"] == {"on": False, "price": 0} and row["hire_pod"] == {"on": False}
+      and row["hire_office"] == {"on": False}
       and "ag-1" not in json.dumps(row)
       and "Nhà làm phim" not in json.dumps(row, ensure_ascii=False), row)
 check("không đặt gì thì hồ sơ là CÔNG KHAI (cài đặt cũ giữ nguyên nghĩa)", row["vis"] == "public", row["vis"])
