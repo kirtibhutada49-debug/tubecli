@@ -45,6 +45,7 @@ HEARTBEAT_SEC = 300
 MAX_BRIEF = 4000
 # Việc «video quảng cáo từ ảnh» (pod.video): ảnh khách gửi đi KÈM lệnh nhận việc (base64, cloud không cất).
 POD_MAX_MODELS, POD_MAX_PRODUCTS = 3, 2
+POD_MAX_LOCATIONS = 1                   # ảnh BỐI CẢNH (5/10/2026): đường phố, studio… — Pod 1.3.26 khoá mọi cảnh vào đó
 POD_IMG_MAX = 3 * 1024 * 1024           # mỗi ảnh sau giải mã — trình duyệt đã thu về ≤ 1600 px
 _POD_STEP_PCT = {"intake": 5, "character": 15, "shots": 25, "board": 40, "clips": 60, "render": 90}
 # Bước của content_video → phần trăm cho khách xem (thang thô, đủ để biết còn sống).
@@ -346,17 +347,18 @@ async def _receive_pod(payload: Dict[str, Any], code: str, entry: Dict[str, Any]
             return {"ok": True, "job": code}
         models = _pod_images(raw_models, POD_MAX_MODELS, code, "m")
         products = _pod_images(payload.get("products") or [], POD_MAX_PRODUCTS, code, "p")
+        locations = _pod_images(payload.get("locations") or [], POD_MAX_LOCATIONS, code, "l")
         job = {"code": code, "kind": "pod", "agent_id": entry["agent_id"], "preset": tpl, "brief": brief,
                "unit": "clip", "clips": clips, "price": int(payload.get("price") or 0),
-               "models": models, "products": products, "consent": bool(raw_models),
+               "models": models, "products": products, "locations": locations, "consent": bool(raw_models),
                "ratio": ratio if ratio in ("9:16", "16:9", "1:1") else "", "scene": scene, "character": character,
                "format": fmt, **voice,
                "status": "accepted", "task_id": "", "files": [], "paths": [], "seconds": 0, "at": time.time()}
         _jobs[code] = job
         _save(job)
         job["_task"] = asyncio.create_task(_run(code))
-    logger.info("[hire] nhận việc video quảng cáo %s: mẫu «%s», %s clip, %s ảnh người mẫu, %s ảnh sản phẩm",
-                code, tpl, clips, len(models), len(products))
+    logger.info("[hire] nhận việc video quảng cáo %s: mẫu «%s», %s clip, %s ảnh người mẫu, %s ảnh sản phẩm, %s ảnh bối cảnh",
+                code, tpl, clips, len(models), len(products), len(locations))
     return {"ok": True, "job": code}
 
 
@@ -459,6 +461,8 @@ async def _run_pod(code: str) -> None:
                 "hire": code, "created_by": "hire", "title": f"Town hire {code}"}
         if job.get("ratio"):
             body["aspect"] = job["ratio"]
+        if job.get("locations"):      # ảnh bối cảnh → Pod bỏ bối cảnh mặc định của mẫu, khoá mọi cảnh vào nơi đó
+            body["location_images"] = job["locations"]
         # Tuỳ biến của khách: chỉ gửi khi có — trống thì Pod lấy theo mẫu (_apply_template)
         if job.get("scene"):
             body["scene_custom"] = job["scene"]

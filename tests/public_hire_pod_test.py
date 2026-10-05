@@ -158,6 +158,11 @@ ph.POD_IMG_MAX = 200
 check("ảnh quá cỡ → image_too_large", rc({**base, "job": "pod555555557"}) == "image_too_large")
 ph.POD_IMG_MAX = 3 * 1024 * 1024
 check("quá 2 ảnh sản phẩm → bad_images", rc({**base, "job": "pod555555558", "products": [{"b64": jpg_b64()}] * 3}) == "bad_images")
+check("quá 1 ảnh bối cảnh → bad_images", rc({**base, "job": "pod555555559", "locations": [{"b64": jpg_b64()}] * 2}) == "bad_images")
+check("ảnh bối cảnh: lưu kho ảnh Pod, đuôi _l1",
+      rc({**base, "job": "podg00000000", "locations": [{"b64": jpg_b64(fmt="PNG")}]}) == {"ok": True, "job": "podg00000000"}
+      and ph._jobs["podg00000000"]["locations"][0].endswith("hire_podg00000000_l1.png")
+      and os.path.isfile(ph._jobs["podg00000000"]["locations"][0]) and j.get("locations") == [], ph._jobs.get("podg00000000"))
 check("mẫu KHÔNG có người mẫu mặc định + không gửi ảnh người → need_model",
       rc({**base, "job": "pod666666666", "preset": "Chỉ kiểu hình"}) == "need_model")
 pa._load_all = lambda: {"P1": dict(settings, hire_pod_models=False)}
@@ -222,6 +227,7 @@ check("tuỳ biến của khách xuống Pod là scene_custom / character_custom
 check("giọng khách xuống Pod: voice + voices[]", body["voice"] == "warm" and body["voices"] == [{"gender": "male"}]
       and "voice_gender" not in body, body)
 check("loại nội dung xuống Pod: format=short", body["format"] == "short", body)
+check("không gửi ảnh bối cảnh → body không có location_images", "location_images" not in body, body)
 ready = [r for r in reports if r["status"] == "ready"]
 check("giao: báo ready kèm file + 30 s; sổ việc giữ đường dẫn video",
       ready and ready[0]["seconds"] == 30 and ready[0]["files"][0]["name"] == "video-quang-cao-pod111111111.mp4"
@@ -260,6 +266,14 @@ ph._jobs["podq00000000"] = {**ph._jobs["pod111111111"], "code": "podq00000000", 
 reports.clear()
 asyncio.run(run_fast("podq00000000"))
 check("Pod từ chối xếp task → failed queue_failed", [r.get("err") for r in reports if r["status"] == "failed"] == ["queue_failed"], reports)
+# ảnh bối cảnh xuống Pod (5/10/2026): job có locations → body location_images
+ph._http_post_json = fake_post
+posted.clear()
+ph._jobs["podg00000001"] = {**ph._jobs["pod111111111"], "code": "podg00000001", "task_id": "", "status": "accepted",
+                            "locations": ph._jobs["podg00000000"]["locations"]}
+state.update(phase=0, status=["running", "review"])
+asyncio.run(run_fast("podg00000001"))
+check("ảnh bối cảnh xuống Pod là location_images", posted and posted[0][1].get("location_images") == ph._jobs["podg00000000"]["locations"], posted[:1])
 
 print(f"\n{passed} pass, {failed} fail")
 shutil.rmtree(TMP, ignore_errors=True)
