@@ -58,10 +58,16 @@ def ok(cond, label, detail=""):
         print("  FAIL", label, "—", str(detail)[:300])
 
 
+_PNG_N = [0]
+
+
 def png_bytes(size=(64, 36), mode="RGB"):
+    """Mỗi lần một ảnh KHÁC (Muse vẽ mới thật) — ảnh trùng trong cùng chat nay bị coi là Muse gửi lại ảnh cũ."""
     from PIL import Image
     buf = io.BytesIO()
-    Image.new(mode, size, (200, 100, 50) if mode == "RGB" else (200, 100, 50, 128)).save(buf, "WEBP")
+    _PNG_N[0] += 1
+    g = _PNG_N[0] % 250
+    Image.new(mode, size, (200, g, 50) if mode == "RGB" else (200, g, 50, 128)).save(buf, "WEBP")
     return buf.getvalue()
 
 

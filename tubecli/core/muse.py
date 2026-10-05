@@ -734,21 +734,45 @@ def _to_jpeg(data: bytes) -> bytes:
         return data
 
 
+# Băm các ảnh Muse đã gửi trong từng chat phụ (giữ THREAD_IMAGES_KEEP ảnh cuối mỗi chat).
+_THREAD_IMAGES: Dict[str, List[str]] = {}
+THREAD_IMAGES_KEEP = 40
+
+
 def generate_image_bytes(prompt: str, aspect_ratio: str = "16:9", reference_images: Optional[list] = None,
                          timeout: int = IMAGE_TIMEOUT, thread_id: str = "") -> bytes:
     """Bytes JPEG của MỘT ảnh Muse vẽ. Ném MuseError (kind refused khi Muse trả lời bằng chữ).
-    thread_id="new": vẽ trong chat MỚI — thử lại sau một lần từ chối phải đi chat mới, chat cũ nhớ lời từ chối (#164)."""
+    thread_id="new": vẽ trong chat MỚI — thử lại sau một lần từ chối phải đi chat mới, chat cũ nhớ lời từ chối (#164).
+
+    Muse GỬI LẠI ảnh cũ của chat thay vì vẽ mới khi lời xin mơ hồ (5/10/2026: #275 có 11 tấm trùng từng byte, nhịp
+    27 = nhịp 26, nhịp 1 vẽ lại = nhịp 149 — prompt chỉ là câu lời đọc). Ảnh trùng một ảnh chat ấy đã gửi ⇒ vẽ lại
+    MỘT lần trong chat mới; vẫn trùng thì báo lỗi (thà thiếu tranh còn hơn tranh của nhịp khác)."""
+    import hashlib
     refs = [p for p in (reference_images or []) if p and os.path.isfile(str(p))][:3]
-    with tempfile.TemporaryDirectory(prefix="muse_img_") as tmp:
-        res = ask(image_request(prompt, aspect_ratio, bool(refs)), want_images=True, files=refs,
-                  image_dir=tmp, max_images=1, timeout=timeout, thread_id=thread_id)
-        imgs = [i for i in (res.get("images") or []) if isinstance(i, dict) and i.get("path")]
-        if not imgs:
-            said = " ".join(str(res.get("text") or "").split())[:240]
-            raise MuseError(_no_output_kind(said), f"Muse did not draw an image{': ' + said if said else '.'}")
-        with open(imgs[0]["path"], "rb") as f:
-            data = f.read()
-    return _to_jpeg(data)
+    for attempt in range(2):
+        with tempfile.TemporaryDirectory(prefix="muse_img_") as tmp:
+            res = ask(image_request(prompt, aspect_ratio, bool(refs)), want_images=True, files=refs,
+                      image_dir=tmp, max_images=1, timeout=timeout, thread_id=thread_id)
+            imgs = [i for i in (res.get("images") or []) if isinstance(i, dict) and i.get("path")]
+            if not imgs:
+                said = " ".join(str(res.get("text") or "").split())[:240]
+                raise MuseError(_no_output_kind(said), f"Muse did not draw an image{': ' + said if said else '.'}")
+            with open(imgs[0]["path"], "rb") as f:
+                data = f.read()
+        digest = hashlib.sha1(data).hexdigest()
+        tid = str(res.get("thread_id") or "")
+        sent = _THREAD_IMAGES.setdefault(tid, []) if tid else []
+        if digest in sent:
+            if attempt == 0:
+                logger.warning("muse: chat %s sent back an image it had already sent — drawing again in a new chat", tid)
+                thread_id = "new"
+                continue
+            raise MuseError("error", "Muse sent back an earlier image instead of drawing a new one.")
+        if tid:
+            sent.append(digest)
+            del sent[:-THREAD_IMAGES_KEEP]
+        return _to_jpeg(data)
+    raise MuseError("error", "Muse sent back an earlier image instead of drawing a new one.")
 
 
 # ── video ─────────────────────────────────────────────────────────────────────

@@ -235,6 +235,58 @@ g = asyncio.run(R.api_get_settings())
 ok(g["max_lanes"] == M.MAX_LANES and "muse2" in g["profiles"] and g["extra_profiles"] == ["muse3"],
    "GET /settings: max_lanes, danh sách hồ sơ để chọn, hồ sơ phụ đang dùng", g)
 
+# ── H ─────────────────────────────────────────────────────────────────────────
+print("H. Muse gửi lại ảnh cũ")
+import io  # noqa: E402
+import os  # noqa: E402
+from PIL import Image  # noqa: E402
+
+
+def png(color):
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+M.set_settings(extra_profiles=[], lanes=1)
+M._cdp_port = lambda profile: PORTS[profile]
+reset()
+M._THREAD_IMAGES.clear()
+plan = []
+asked = []
+
+
+def img_tool(port, action, req=None, timeout=60):
+    asked.append(req["thread"])
+    color, tid = plan.pop(0)
+    p = os.path.join(req["image_dir"], f"x{len(asked)}.png")
+    with open(p, "wb") as f:
+        f.write(png(color))
+    return {"ok": True, "text": "", "images": [{"path": p}], "thread_id": tid}
+
+
+M.run_tool = img_tool
+plan[:] = [("red", "T1"), ("red", "T1"), ("blue", "T2")]
+a = M.generate_image_bytes("shot 26")
+b = M.generate_image_bytes("shot 27")
+ok(asked == ["new", "T1", "new"] and a != b, "ảnh trùng ảnh chat đã gửi → vẽ lại trong chat MỚI", asked)
+plan[:] = [("blue", "T1")]
+asked.clear()
+c = M.generate_image_bytes("shot 28")
+ok(asked == ["T1"] and c == b, "ảnh giống ảnh của chat KHÁC → vẫn nhận (chỉ so trong cùng chat)", asked)
+plan[:] = [("green", "T3"), ("green", "T3")]
+M.generate_image_bytes("shot 29")
+plan[:] = [("green", "T3"), ("green", "T3")]
+asked.clear()
+try:
+    M._THREAD_IMAGES.setdefault("T3", []).append(__import__("hashlib").sha1(png("green")).hexdigest())
+    M._save_slot("chayagent", {"profile": "chayagent", "thread": "T3", "turns": 1})
+    M.generate_image_bytes("shot 30", thread_id="T3")
+    ok(False, "trùng cả hai lần → MuseError")
+except M.MuseError as e:
+    ok("earlier image" in str(e) and asked == ["T3", "new"], "trùng cả hai lần → MuseError, không trả tranh nhịp khác",
+       (str(e), asked))
+
 print()
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
