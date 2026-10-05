@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -3312,6 +3313,9 @@ def _step_images(state: Dict, options: Dict) -> None:
         filled = 0
     else:
         filled = _fill_missing_prompts(state)
+        # Lời đã chốt (storyboard xong) — đọc giọng ở luồng nền trong lúc ảnh vẽ trên đám mây.
+        if options.get("tts", True):
+            _start_tts_prefetch(state, options)
     if filled:
         state["_say"]("images", "running", f"built {filled} missing image prompt(s) from the shot text")
     body = {
@@ -4067,12 +4071,14 @@ def _tts_capcut(state: Dict, options: Dict) -> None:
                 logger.warning(f"[ContentVideo] capcut tts failed again for shot {shot.get('id')}: {e}")
         failed_shots = still
     failed = len(failed_shots)
-    state["tts_summary"] = f"{ok} voiced (CapCut)" + (f", {failed} failed" if failed else "") + \
+    # Nhịp luồng đọc trước (lúc vẽ ảnh) đã đọc xong không nằm trong `todo` — vẫn là nhịp có tiếng của lượt này.
+    prior = int(state.get("_tts_ok_before") or 0)
+    state["tts_summary"] = f"{ok + prior} voiced (CapCut)" + (f", {failed} failed" if failed else "") + \
         (f", {skipped} silent" if skipped else "")
     if failed and last_err:
         # Lý do hỏng phải lên thẻ, không chỉ nằm trong log server.
         state.setdefault("warnings", []).append(f"CapCut TTS last error: {last_err}")
-    if ok == 0 and failed:
+    if ok + prior == 0 and failed:
         raise RuntimeError(f"CapCut TTS failed for every shot ({failed}): {last_err}")
     _warn_voiceless(state, failed)
 
@@ -4116,7 +4122,89 @@ def _tts_edge(state: Dict, options: Dict) -> None:
     _warn_voiceless(state, failed)
 
 
+# Luồng đọc giọng chạy TRONG LÚC vẽ ảnh, theo tập — lượt chạy lại khi luồng cũ còn sống thì bám vào nó, không đọc đôi.
+_TTS_PREFETCH: Dict[Any, Dict] = {}
+
+
+def _start_tts_prefetch(state: Dict, options: Dict) -> None:
+    """Đọc giọng SONG SONG với bước vẽ ảnh (user 5/10/2026: «tạo ảnh cloud không tốn CPU, sao không vừa tạo voice?»).
+
+    Ảnh vẽ trên đám mây (Muse/Cloudflare… ~1 phút/tấm) nên máy rỗi; trước đây giọng chỉ bắt đầu khi tấm cuối xong —
+    tập 113 nhịp (#274) chờ thêm ~40 phút giọng edge sau ~2 giờ vẽ. Giờ bắt đầu vẽ là đọc luôn ở luồng nền; bước
+    «Voice the narration» chờ luồng này rồi chạy đúng đường cũ — edge (batch-tts) và CapCut đều bỏ qua nhịp đã có
+    tiếng, nên lượt chính chỉ đọc nốt nhịp hỏng/thiếu và thử lại như trước.
+
+    An toàn ghi song song: Studio cập nhật TỪNG nhịp (`tts_audio_url`) dưới khoá storyboard của tập, còn gen-images chỉ
+    ghi trường ảnh. Không áp cho dự án CANVAS — bước viết cảnh của bộ cảnh có thể gộp/chèn nhịp nên lời chưa chốt.
+    """
+    ep_id = state.get("episode_id")
+    if not ep_id or state.get("_tts_prefetch") or _canvas_kit_meta(state):
+        return
+    old = _TTS_PREFETCH.get(ep_id)
+    if old and old["thread"].is_alive():
+        state["_tts_prefetch"] = old
+        return
+    shadow = dict(state)
+    shadow["warnings"] = []
+    box: Dict[str, Any] = {"error": "", "last": ("", None), "state": shadow}
+    # Luồng nền KHÔNG được báo lên thẻ bước tts (bước vẽ đang chạy) — giữ câu cuối để bước tts hiện khi chờ.
+    shadow["_say"] = lambda step, status, message="", progress=None: box.__setitem__("last", (message, progress))
+
+    def run() -> None:
+        try:
+            engine = _tts_prepare(shadow, options)
+            if engine == "capcut":
+                _tts_capcut(shadow, options)
+            else:
+                _tts_edge(shadow, options)
+        except BaseException as e:      # noqa: BLE001 — lượt chính đọc lại phần thiếu và báo lỗi thật
+            box["error"] = str(e)[:300]
+            logger.info(f"[ContentVideo] voice prefetch for ep {ep_id} stopped: {e}")
+
+    t = threading.Thread(target=run, name=f"cv-tts-prefetch-{ep_id}", daemon=True)
+    box["thread"] = t
+    _TTS_PREFETCH[ep_id] = box
+    state["_tts_prefetch"] = box
+    t.start()
+
+
+def _join_tts_prefetch(state: Dict) -> int:
+    """Chờ luồng đọc trước (nếu có) xong; trả số nhịp đã có tiếng lúc này (0 khi không có luồng nào)."""
+    box = state.pop("_tts_prefetch", None)
+    if not box:
+        return 0
+    t = box["thread"]
+    while t.is_alive():
+        if state["_cancelled"]():
+            raise _cancel_exc()
+        msg, pct = box["last"]
+        state["_say"]("tts", "running", f"voice started while drawing · {msg}".rstrip(" ·"), pct)
+        t.join(5)
+    _TTS_PREFETCH.pop(state.get("episode_id"), None)
+    for w in box["state"].get("warnings") or []:
+        if w not in state.setdefault("warnings", []):
+            state["warnings"].append(w)
+    try:
+        return sum(1 for s in _storyboards(state["episode_id"]) if str(s.get("tts_audio_url") or "").strip())
+    except Exception:       # noqa: BLE001 — chỉ để ghi tóm tắt
+        return 0
+
+
 def _step_tts(state: Dict, options: Dict) -> None:
+    state["_tts_ok_before"] = _join_tts_prefetch(state)
+    engine = _tts_prepare(state, options)
+    state["tts_engine"] = engine
+    _task_meta(state.get("task_id"), voice=_voice_meta(engine, state, options))
+    state["_say"]("tts", "running", f"engine: {engine}")
+    if engine == "capcut":
+        _tts_capcut(state, options)
+    else:
+        _tts_edge(state, options)
+    _audio_check(state)
+
+
+def _tts_prepare(state: Dict, options: Dict) -> str:
+    """Chọn engine + giọng cho lượt đọc ("edge"/"capcut"). Dùng chung cho bước tts và luồng đọc trước."""
     engine = _tts_engine(state, options)
     if not engine:
         raise RuntimeError("No TTS extension is usable (install TTS VibeVoice or CapCut TTS).")
@@ -4146,14 +4234,7 @@ def _step_tts(state: Dict, options: Dict) -> None:
                     raise RuntimeError(
                         f"CapCut account {state.get('capcut_email') or ''} has no voice for "
                         f"{language_name(lang)}. Pick capcut_speaker, add a matching voice, or use tts_engine=edge.")
-    state["tts_engine"] = engine
-    _task_meta(state.get("task_id"), voice=_voice_meta(engine, state, options))
-    state["_say"]("tts", "running", f"engine: {engine}")
-    if engine == "capcut":
-        _tts_capcut(state, options)
-    else:
-        _tts_edge(state, options)
-    _audio_check(state)
+    return engine
 
 
 def _shot_audio_file(url: str) -> str:
