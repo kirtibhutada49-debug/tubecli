@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "ブラウザーを閉じる",
   "cg.allow_always": "許可（以後は確認しない）",
   "cg.allow_always_hint": "このチャットの以降の要求は、アプリを再起動するまで自動で承認されます。",
-  "cg.default_folder_hint": "新しいチャットに適用されます。開いているチャットは作成時のフォルダーを保ちます。"
+  "cg.default_folder_hint": "新しいチャットに適用されます。開いているチャットは作成時のフォルダーを保ちます。",
+  "cg.cmds_n": "コマンド {n} 件",
+  "cg.cmds_ok": "すべて成功",
+  "cg.cmds_bad": "{n} 件失敗"
 }

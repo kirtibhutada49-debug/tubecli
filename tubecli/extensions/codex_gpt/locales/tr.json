@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "Tarayıcıyı kapat",
   "cg.allow_always": "İzin ver, bir daha sorma",
   "cg.allow_always_hint": "Bu sohbetteki sonraki istekler, uygulama yeniden başlayana kadar otomatik onaylanır.",
-  "cg.default_folder_hint": "YENİ sohbetler için geçerlidir; açık sohbet başladığı klasörü korur."
+  "cg.default_folder_hint": "YENİ sohbetler için geçerlidir; açık sohbet başladığı klasörü korur.",
+  "cg.cmds_n": "{n} komut",
+  "cg.cmds_ok": "hepsi başarılı",
+  "cg.cmds_bad": "{n} başarısız"
 }

@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "Đóng trình duyệt",
   "cg.allow_always": "Cho phép, không hỏi lại",
   "cg.allow_always_hint": "Mọi yêu cầu sau trong phiên này tự được nhận, tới khi khởi động lại ứng dụng.",
-  "cg.default_folder_hint": "Áp cho phiên MỚI — phiên đang mở giữ thư mục lúc nó được tạo."
+  "cg.default_folder_hint": "Áp cho phiên MỚI — phiên đang mở giữ thư mục lúc nó được tạo.",
+  "cg.cmds_n": "{n} lệnh",
+  "cg.cmds_ok": "đều xong",
+  "cg.cmds_bad": "{n} lỗi"
 }

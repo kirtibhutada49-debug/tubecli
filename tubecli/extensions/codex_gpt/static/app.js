@@ -404,6 +404,7 @@
     el.className = 'cg-turn';
     el.dataset.turn = turn.id;
     (turn.items || []).forEach((it) => { const n = itemEl(it); if (n) el.appendChild(n); });
+    regroupCmds(el);
     const pl = S.plans[turn.id];
     if (pl && pl.length) el.appendChild(planEl(pl));
     const df = S.diffs[turn.id];
@@ -422,6 +423,48 @@
     if (open) d.open = true;
     d.innerHTML = '<summary><span class="lbl">' + esc(label) + '</span>' + (tag ? '<span class="tag ' + (tagCls || '') + '">' + esc(tag) + '</span>' : '') + '</summary>' + (body || '');
     return d;
+  }
+
+  // Dồn các lệnh ĐÃ CHẠY XONG liên tiếp vào một khối thu gọn: Codex dò file là chạy hàng
+  // chục lệnh, mỗi lệnh một dòng thì chat thành bức tường và chữ của nó bị đẩy đi mất
+  // (user 5/10/2026). Chạy SAU khi vẽ để không đụng vào cơ chế vá từng thẻ (S.itemEls):
+  // các thẻ cũ được CHUYỂN vào khối, nên old.replaceWith(fresh) vẫn chạy đúng chỗ.
+  const CMD_GROUP_MIN = 3;
+  function regroupCmds(tEl) {
+    if (!tEl) return;
+    // Bung các khối cũ ra trước rồi dựng lại — đơn giản và luôn đúng khi lệnh mới chảy vào.
+    tEl.querySelectorAll('.cg-cmdgroup').forEach((g) => {
+      const body = g.querySelector('.cg-cmdgroup-body');
+      while (body && body.firstChild) tEl.insertBefore(body.firstChild, g);
+      g.remove();
+    });
+    const kids = Array.from(tEl.children);
+    let i = 0;
+    while (i < kids.length) {
+      if (!kids[i].classList.contains('cg-cmd') || !kids[i].dataset.done) { i += 1; continue; }
+      let j = i;
+      while (j < kids.length && kids[j].classList.contains('cg-cmd') && kids[j].dataset.done) j += 1;
+      const run = kids.slice(i, j);
+      i = j;
+      if (run.length < CMD_GROUP_MIN) continue;
+      const bad = run.filter((x) => x.dataset.exit && x.dataset.exit !== '0').length;
+      const key = run[0].dataset.item || run[0].querySelector('.lbl')?.textContent || '';
+      const g = document.createElement('details');
+      g.className = 'cg-card cg-cmdgroup';
+      if (S.cmdOpen && S.cmdOpen.has(key)) g.open = true;
+      g.innerHTML = '<summary><span class="lbl">⌨ '
+        + esc(T('cg.cmds_n', { n: run.length }, '{n} commands')) + '</span>'
+        + '<span class="tag ' + (bad ? 'err' : 'ok') + '">'
+        + esc(bad ? T('cg.cmds_bad', { n: bad }, '{n} failed') : T('cg.cmds_ok', null, 'all fine'))
+        + '</span></summary><div class="cg-cmdgroup-body"></div>';
+      g.addEventListener('toggle', () => {
+        S.cmdOpen = S.cmdOpen || new Set();
+        if (g.open) S.cmdOpen.add(key); else S.cmdOpen.delete(key);
+      });
+      run[0].replaceWith(g);
+      const body = g.querySelector('.cg-cmdgroup-body');
+      run.forEach((x) => body.appendChild(x));
+    }
   }
 
   function planEl(steps) {
@@ -466,6 +509,11 @@
       const cls = it.status === 'inProgress' ? 'run' : it.exitCode === 0 ? 'ok' : (it.exitCode != null || it.status === 'failed' || it.status === 'declined') ? 'err' : '';
       const out = it.aggregatedOutput || '';
       el = cardEl('$ ' + cmdText(it.command), st, out ? '<pre>' + esc(out.slice(-20000)) + '</pre>' : '', false, cls);
+      // Dấu để regroupCmds() dồn các lệnh ĐÃ XONG liên tiếp lại; lệnh đang chạy thì để riêng
+      // cho chủ máy thấy Codex đang làm gì.
+      el.classList.add('cg-cmd');
+      if (it.status !== 'inProgress') el.dataset.done = '1';
+      if (it.exitCode != null) el.dataset.exit = String(it.exitCode);
     } else if (t === 'fileChange') {
       const ch = it.changes || [];
       const files = ch.map((c) => {
@@ -588,6 +636,7 @@
     const fresh = itemEl(i >= 0 ? turn.items[i] : item);
     if (old && fresh) { if (old.open && fresh.tagName === 'DETAILS') fresh.open = true; old.replaceWith(fresh); }
     else if (fresh) tEl.appendChild(fresh);
+    regroupCmds(tEl);
     stick(was);
   }
 
@@ -606,6 +655,7 @@
           if (old && fresh) { if (old.open && fresh.tagName === 'DETAILS') fresh.open = true; old.replaceWith(fresh); }
           else if (fresh) putItem(tId, it);
         });
+        q.forEach((tId) => regroupCmds($('msgs').querySelector('.cg-turn[data-turn="' + CSS.escape(tId) + '"]')));
         q.clear();
         stick(was);
       });

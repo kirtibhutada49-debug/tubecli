@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "Cerrar el navegador",
   "cg.allow_always": "Permitir, no preguntar más",
   "cg.allow_always_hint": "Las siguientes solicitudes de este chat se aprueban solas hasta que la app se reinicie.",
-  "cg.default_folder_hint": "Se aplica a chats NUEVOS: un chat ya abierto conserva su carpeta inicial."
+  "cg.default_folder_hint": "Se aplica a chats NUEVOS: un chat ya abierto conserva su carpeta inicial.",
+  "cg.cmds_n": "{n} comandos",
+  "cg.cmds_ok": "todo bien",
+  "cg.cmds_bad": "{n} con error"
 }

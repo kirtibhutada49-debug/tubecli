@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "关闭浏览器",
   "cg.allow_always": "允许，不再询问",
   "cg.allow_always_hint": "本次会话之后的请求将自动批准，直到应用重启。",
-  "cg.default_folder_hint": "仅对新会话生效；已打开的会话保留它开始时的文件夹。"
+  "cg.default_folder_hint": "仅对新会话生效；已打开的会话保留它开始时的文件夹。",
+  "cg.cmds_n": "{n} 条命令",
+  "cg.cmds_ok": "全部正常",
+  "cg.cmds_bad": "{n} 条失败"
 }

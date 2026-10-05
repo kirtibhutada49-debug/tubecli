@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "關閉瀏覽器",
   "cg.allow_always": "允許，不再詢問",
   "cg.allow_always_hint": "本次工作階段之後的請求會自動核准，直到應用重新啟動。",
-  "cg.default_folder_hint": "僅對新的工作階段生效；已開啟的工作階段保留它開始時的資料夾。"
+  "cg.default_folder_hint": "僅對新的工作階段生效；已開啟的工作階段保留它開始時的資料夾。",
+  "cg.cmds_n": "{n} 條命令",
+  "cg.cmds_ok": "全部正常",
+  "cg.cmds_bad": "{n} 條失敗"
 }

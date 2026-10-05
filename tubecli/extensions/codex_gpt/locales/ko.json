@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "브라우저 닫기",
   "cg.allow_always": "허용하고 다시 묻지 않기",
   "cg.allow_always_hint": "이 대화의 이후 요청은 앱을 다시 시작할 때까지 자동으로 승인됩니다.",
-  "cg.default_folder_hint": "새 대화에 적용됩니다. 이미 열린 대화는 시작할 때의 폴더를 유지합니다."
+  "cg.default_folder_hint": "새 대화에 적용됩니다. 이미 열린 대화는 시작할 때의 폴더를 유지합니다.",
+  "cg.cmds_n": "명령 {n}개",
+  "cg.cmds_ok": "모두 정상",
+  "cg.cmds_bad": "{n}개 실패"
 }

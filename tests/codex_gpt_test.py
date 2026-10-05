@@ -391,6 +391,28 @@ for lang in ("vi", "es", "ja", "ko", "ru", "tr", "zh", "zh-TW"):
         bad_lang.append(f"{lang}: thiếu {miss[:3]} chỗ giữ lệch {ph[:3]}")
 check("F9 đủ 9 ngôn ngữ, chỗ giữ {…} khớp tiếng Anh", not bad_lang, bad_lang)
 
+# ── G. Giao diện: gộp lệnh, nút «không hỏi lại», nhắc thư mục làm việc ──────
+# User 5/10/2026: «khi cấp phép tự động thì dồn lại cho khỏi loãng giao diện chat» — Codex dò
+# file là chạy hàng chục lệnh, mỗi lệnh một thẻ thì chữ của nó bị đẩy đi mất.
+_app = (loc.parent / "static" / "app.js").read_text(encoding="utf-8")
+_css = (loc.parent / "static" / "app.css").read_text(encoding="utf-8")
+check("G1 có lượt dồn nhóm lệnh", "function regroupCmds(" in _app and "cg-cmdgroup" in _app)
+check("G2 chỉ dồn lệnh ĐÃ XONG (lệnh đang chạy để riêng cho thấy Codex đang làm gì)",
+      "if (it.status !== 'inProgress') el.dataset.done = '1';" in _app
+      and "kids[j].dataset.done" in _app)
+check("G3 dưới 3 lệnh thì không dồn (một hai dòng gộp lại chỉ thêm một lần bấm)",
+      "CMD_GROUP_MIN = 3" in _app and "run.length < CMD_GROUP_MIN" in _app)
+# Gọi ở CẢ BA đường vẽ: vẽ cả lượt, vá một thẻ, và vẽ lại theo hàng đợi.
+check("G4 gọi sau cả ba đường vẽ", _app.count("regroupCmds(") >= 4, _app.count("regroupCmds("))
+check("G5 nhớ trạng thái mở của khối (đang xem thì lệnh mới chảy vào không đóng sập lại)",
+      "S.cmdOpen" in _app and "addEventListener('toggle'" in _app)
+check("G6 CSS khối gộp có trần chiều cao + cuộn riêng", ".cg-cmdgroup-body" in _css and "max-height" in _css)
+check("G7 nút «Cho phép, không hỏi lại» có mặt và gửi acceptAlways",
+      'data-ap="acceptAlways"' in _app and "cg.allow_always" in _app)
+check("G8 ô thư mục làm việc có dòng nhắc chỉ áp cho phiên MỚI",
+      "cg.default_folder_hint" in _app and "default_cwd" in _app)
+
+
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{PASS} pass, {FAIL} fail")
 sys.exit(1 if FAIL else 0)

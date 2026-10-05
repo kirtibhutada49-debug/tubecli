@@ -204,5 +204,8 @@
   "cg.tool.browser_close": "Close the browser",
   "cg.allow_always": "Allow, stop asking",
   "cg.allow_always_hint": "Every later request in this chat is approved automatically, until the app restarts.",
-  "cg.default_folder_hint": "Applies to NEW chats - a chat already open keeps the folder it started with."
+  "cg.default_folder_hint": "Applies to NEW chats - a chat already open keeps the folder it started with.",
+  "cg.cmds_n": "{n} commands",
+  "cg.cmds_ok": "all fine",
+  "cg.cmds_bad": "{n} failed"
 }

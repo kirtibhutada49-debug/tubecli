@@ -263,3 +263,10 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "
 .cg-roots { display: flex; flex-direction: column; gap: 4px; }
 .cg-roots code { font-size: 11.5px; padding: 3px 7px; border-radius: 6px; background: var(--code-bg); overflow-wrap: anywhere; }
 .cg-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+
+/* Khối GỘP LỆNH: Codex dò file là chạy hàng chục lệnh, mỗi lệnh một thẻ thì chat thành bức
+   tường và chữ của nó bị đẩy đi mất (user 5/10/2026). Các lệnh đã xong dồn vào đây, bấm mới
+   mở ra; lệnh đang chạy vẫn để riêng bên ngoài. */
+.cg-cmdgroup > summary .lbl { opacity: .85; }
+.cg-cmdgroup-body { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 2px; max-height: 40vh; overflow-y: auto; }
+.cg-cmdgroup-body > .cg-card { margin: 0; }
