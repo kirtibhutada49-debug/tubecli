@@ -880,6 +880,15 @@ def usage(agent_id: str) -> Dict[str, int]:
 _gate = _Gate()
 
 
+def _browser_action(text: str) -> str:
+    """Hành động của lệnh browser.remote (thân là JSON {"action": …}); không đọc được → ''."""
+    try:
+        d = json.loads(text)
+    except (TypeError, ValueError):
+        return ""
+    return str(d.get("action") or "") if isinstance(d, dict) else ""
+
+
 async def catalog(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Danh mục giọng của skill capcut.tts — đọc thẳng extension CapCut TTS trên máy này
     (ngôn ngữ + giọng theo vùng tài khoản, đã lọc giọng đọc sai tiếng) thay cho 6 giọng
@@ -961,13 +970,19 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     agent_id = entry["agent_id"]
     st = entry["settings"]
+    # browser.remote «info» (Town hỏi còn mấy chỗ — lặp lại suốt lúc khung thuê đang mở) và «stop» (khách trả phiên
+    # sớm) KHÔNG phải một lượt dùng: cloud gọi chúng với meter=false nên thanh «13/100» không nhích, nhưng máy từng
+    # đếm cả → hết 100 lượt/ngày dù chưa ai thuê (user 5/10/2026 «cái chỗ limit này là sao?»), và hết lượt rồi thì
+    # khách KHÔNG dừng được phiên đang trả tiền. Hai lượt này cũng không báo lên bản đồ (không phồng số lượt chạy).
+    free_call = skill_id == "browser.remote" and _browser_action(text) in ("info", "stop")
     # «Mệt»: máy đang quá ngưỡng chủ đặt → tạm ngừng nhận việc công khai, để việc của
     # chính chủ không bị người lạ làm chậm. Đo ngay lúc gọi, không đợi nhịp đẩy hồ sơ.
-    if is_tired(st, machine_load()):
+    if not free_call and is_tired(st, machine_load()):
         raise PublicSkillError("tired", status=429)
-    why = _gate.enter(agent_id, int(st.get("daily_cap") or DEFAULT_DAILY_CAP), threshold(st, "max_parallel"))
-    if why:
-        raise PublicSkillError(why, status=429)
+    if not free_call:
+        why = _gate.enter(agent_id, int(st.get("daily_cap") or DEFAULT_DAILY_CAP), threshold(st, "max_parallel"))
+        if why:
+            raise PublicSkillError(why, status=429)
 
     from tubecli.core import town_telemetry
 
@@ -978,7 +993,7 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
     # kèm mốc giờ + nhà đang đứng là bằng chứng «có ai đó vừa nhờ một agent giấu mặt».
     # Giấu agent khỏi danh sách mà vẫn vẽ nó làm việc thì giấu chưa xong. Đổi lại: lượt
     # chat riêng tư không vào số đếm của nhà; số lượt của chủ vẫn đếm đủ trong tab Công khai.
-    quiet = str(st.get("visibility") or DEFAULT_VISIBILITY) == "private"
+    quiet = str(st.get("visibility") or DEFAULT_VISIBILITY) == "private" or free_call
 
     def report(status: str, secs: float = 0.0) -> None:
         if not quiet:
@@ -1013,7 +1028,8 @@ async def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("[public] %s failed: %s", skill_id, e)
         raise PublicSkillError("skill_failed", status=502)
     finally:
-        _gate.leave(agent_id)
+        if not free_call:
+            _gate.leave(agent_id)
         report("success" if ok else "error", time.time() - started)
 
 
