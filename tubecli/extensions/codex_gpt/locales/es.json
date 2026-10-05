@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "Activa «No preguntar» en Ajustes para que Codex lo haga sin preguntar.",
   "cg.ask_once_hint": "Codex siempre te pregunta antes de esto: pone un agente frente a desconocidos y fija precios.",
   "cg.writable": "Codex puede escribir en",
-  "cg.writable_note": "Las mismas zonas que TubeCLI deja usar a su IA. Los datos de TubeCLI son solo lectura para Codex.",
+  "cg.writable_note": "Las mismas áreas que TubeCLI permite a su IA, más la carpeta de TubeCLI (carpeta de trabajo por defecto). Codex puede leer en cualquier sitio; aquí también puede ESCRIBIR, incluida la carpeta data de TubeCLI (llavero, claves de API).",
   "cg.tools_title": "Herramientas de TubeCLI",
   "cg.tools_on": "Dejar que Codex use TubeCLI (Tablero de tareas, navegador, extensiones…)",
   "cg.tools_ask_label": "Cuando Codex quiera cambiar algo en TubeCLI",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "Escribir en el navegador",
   "cg.tool.browser_scroll": "Desplazar la página",
   "cg.tool.browser_nav": "Atrás / adelante / recargar",
-  "cg.tool.browser_close": "Cerrar el navegador"
+  "cg.tool.browser_close": "Cerrar el navegador",
+  "cg.allow_always": "Permitir, no preguntar más",
+  "cg.allow_always_hint": "Las siguientes solicitudes de este chat se aprueban solas hasta que la app se reinicie.",
+  "cg.default_folder_hint": "Se aplica a chats NUEVOS: un chat ya abierto conserva su carpeta inicial."
 }

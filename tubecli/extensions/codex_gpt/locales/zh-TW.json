@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "在設定中開啟「不再詢問」，Codex 就會直接執行。",
   "cg.ask_once_hint": "此操作 Codex 一定會先問你——它會把智慧體開放給陌生人並設定價格。",
   "cg.writable": "Codex 可以寫入",
-  "cg.writable_note": "與 TubeCLI 允許其 AI 使用的範圍相同。TubeCLI 的資料對 Codex 唯讀。",
+  "cg.writable_note": "與 TubeCLI 允許其 AI 使用的區域相同，另加 TubeCLI 資料夾（預設工作資料夾）。Codex 可以讀取任何位置；在這些區域裡它還可以寫入 —— 包括 TubeCLI 的 data 資料夾（金鑰庫、API 金鑰）。",
   "cg.tools_title": "TubeCLI 工具",
   "cg.tools_on": "讓 Codex 使用 TubeCLI（任務看板、瀏覽器、擴充功能…）",
   "cg.tools_ask_label": "當 Codex 想在 TubeCLI 裡做變更時",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "在瀏覽器中輸入",
   "cg.tool.browser_scroll": "捲動頁面",
   "cg.tool.browser_nav": "上一頁 / 下一頁 / 重新載入",
-  "cg.tool.browser_close": "關閉瀏覽器"
+  "cg.tool.browser_close": "關閉瀏覽器",
+  "cg.allow_always": "允許，不再詢問",
+  "cg.allow_always_hint": "本次工作階段之後的請求會自動核准，直到應用重新啟動。",
+  "cg.default_folder_hint": "僅對新的工作階段生效；已開啟的工作階段保留它開始時的資料夾。"
 }

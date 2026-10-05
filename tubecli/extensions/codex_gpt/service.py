@@ -116,6 +116,10 @@ class CodexGptService:
         self.tool_items: Dict[str, Dict[str, Any]] = {}     # lời gọi công cụ tubecli đang chạy → phiên nào
         self.tool_session_ok: Set[str] = set()              # phiên đã «Cho phép trong phiên này»
         self.win_sandbox: Dict[str, Any] = {}               # {"status", "setup": running|failed|done, "error"}
+        # Phiên chat đã bấm «Cho phép, không hỏi lại»: mọi yêu cầu duyệt sau đó tự nhận.
+        # CHỈ trong RAM và chết theo app-server — mở lại máy là hỏi lại từ đầu, vì đây là lòng
+        # tin cho MỘT lượt làm việc, không phải một cài đặt.
+        self.no_ask: set = set()
 
     # ── đường dẫn + trạng thái ───────────────────────────────────────────────
     @property
@@ -258,7 +262,33 @@ class CodexGptService:
             if r not in out:
                 out.append(r)
         out.append(str(self.workspace))
+        # Gốc TubeCLI: thư mục làm việc mặc định, nên Codex ghi được ở đây. Liệt kê tường minh
+        # để mục «Codex được ghi vào» nói ĐÚNG những gì nó ghi được — sandwich cwd của Codex
+        # vốn đã cho ghi trọn cwd, ẩn đi thì giao diện báo thiếu.
+        d = self.default_cwd()
+        if d not in out:
+            out.append(d)
         return out
+
+    def default_cwd(self) -> str:
+        """Thư mục làm việc MẶC ĐỊNH = GỐC TubeCLI (user 5/10/2026: «để mặc định workspace làm
+        việc với tubecli khi cài extension này»).
+
+        Trước đây mặc định là workspace riêng (data/codex_gpt/workspace) — một thư mục trống,
+        nên vừa cài xong Codex chẳng có gì để làm và chủ máy phải tự gõ đường dẫn.
+
+        Đánh đổi phải biết: sandbox «workspace-write» của Codex cho GHI TRỌN cwd («The sandbox
+        permits reading files, and editing files in `cwd` and `writable_roots`» — chuỗi trong
+        chính binary codex), mà schema config.toml KHÔNG có khoá loại trừ đường dẫn, nên
+        data/ (két Keychain, khoá API) nằm trong vùng Codex SỬA được. Phần ĐỌC thì vốn đã mở:
+        workspace-write cho đọc mọi nơi bất kể cwd. Câu chữ ở giao diện nói đúng điều này.
+        """
+        try:
+            from tubecli.config import BASE_DIR
+            p = str(BASE_DIR)
+            return p if os.path.isdir(p) else str(self.workspace)
+        except Exception:      # noqa: BLE001 — không lấy được gốc thì về workspace như cũ
+            return str(self.workspace)
 
     def _cwd_allowed(self, cwd: str, sandbox: str) -> bool:
         if sandbox == "danger-full-access":
@@ -519,8 +549,17 @@ class CodexGptService:
                 await b.respond(rid, error={"code": -32601, "message": f"{method} is not supported by TubeCLI"})
             return
         key = f"{self._gen}-{rid}"
-        self.approvals[key] = {"rid": rid, "method": method, "params": msg.get("params") or {}, "bridge": b, "at": _now()}
-        await self.broadcast({"type": "approval", "key": key, "method": method, "params": msg.get("params") or {}})
+        params = msg.get("params") or {}
+        # Phiên đã bấm «không hỏi lại»: nhận ngay, và vẫn báo cho giao diện biết đã tự nhận
+        # cái gì — tự duyệt mà im lặng thì chủ máy không còn thấy Codex đang làm gì.
+        tid = str(params.get("threadId") or "")
+        if tid and tid in self.no_ask:
+            ok = "approved" if method in ("execCommandApproval", "applyPatchApproval") else "accept"
+            await b.respond(rid, {"decision": ok})
+            await self.broadcast({"type": "approval_auto", "method": method, "params": params})
+            return
+        self.approvals[key] = {"rid": rid, "method": method, "params": params, "bridge": b, "at": _now()}
+        await self.broadcast({"type": "approval", "key": key, "method": method, "params": params})
         asyncio.get_running_loop().call_later(
             APPROVAL_TTL_S, lambda: asyncio.ensure_future(self.answer_approval(key, "decline")))
 
@@ -542,6 +581,13 @@ class CodexGptService:
         b = a["bridge"]
         if b is not self.bridge or not b.alive:
             return False
+        if decision == "acceptAlways":
+            # Ghi sổ TRƯỚC khi trả lời: Codex gửi yêu cầu kế tiếp ngay sau khi nhận được câu
+            # trả lời này, ghi sau thì cái đó vẫn kịp hiện thẻ hỏi.
+            tid = str((a.get("params") or {}).get("threadId") or "")
+            if tid:
+                self.no_ask.add(tid)
+            decision = "accept"
         if a["method"] in ("execCommandApproval", "applyPatchApproval"):      # giao thức cũ (v1)
             decision = {"accept": "approved", "acceptForSession": "approved_for_session",
                         "decline": "denied", "cancel": "abort"}.get(decision, "denied")
@@ -628,7 +674,7 @@ class CodexGptService:
     def _check_cwd(self, cwd: str) -> str:
         if not cwd:
             self.workspace.mkdir(parents=True, exist_ok=True)
-            return str(self.workspace)
+            return self.default_cwd()
         p = Path(os.path.expanduser(cwd))
         if not p.is_absolute():
             raise GptError("bad_cwd", "The working folder must be an absolute path", 400)
@@ -941,6 +987,9 @@ class CodexGptService:
         self.save_state(st)
         if "approval" in patch or "sandbox" in patch or "tools" in patch:
             self.loaded.clear()                 # lượt sau mở lại phiên với chế độ mới
+            # Đổi chế độ duyệt/sandbox là đổi luật chơi ⇒ bỏ mọi «không hỏi lại» đã cho trước
+            # đó, kẻo chủ máy siết lại mà phiên cũ vẫn tự duyệt.
+            self.no_ask.clear()
         return {"auto_switch": st["auto_switch"], "settings": st["settings"]}
 
     async def apply_settings(self, patch: Dict[str, Any]) -> Dict[str, Any]:
@@ -960,6 +1009,7 @@ class CodexGptService:
                 "install": cli.install_state(), "node": bool(shutil.which("node")),
                 "accounts": self.accounts_public(), "active": st.get("active"), "auto_switch": st["auto_switch"],
                 "settings": st["settings"], "recent_cwds": st["recent_cwds"], "workspace": str(self.workspace),
+                "default_cwd": self.default_cwd(),
                 "home": str(self.home), "continue_text": CONTINUE_TEXT,
                 "bridge": {"running": bool(self.bridge and self.bridge.alive), "error": self.bridge_error},
                 "running": dict(self.active_turns), "platform": "windows" if os.name == "nt" else "posix",

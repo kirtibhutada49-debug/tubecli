@@ -154,7 +154,11 @@ async def main():
 
     # ── C. phiên ─────────────────────────────────────────────────────────────
     t = await svc.start_thread()
-    check("C1 phiên mới: thư mục làm việc mặc định của TubeCLI", t["id"] and t["cwd"] == str(svc.workspace), t)
+    from tubecli.config import BASE_DIR
+    check("C1 phiên mới: thư mục làm việc mặc định = GỐC TubeCLI",
+          t["id"] and t["cwd"] == str(BASE_DIR), t)
+    check("C1b gốc TubeCLI nằm trong vùng Codex được ghi (nếu không, _cwd_allowed chặn phiên mới)",
+          str(BASE_DIR) in svc.writable_roots(), svc.writable_roots())
     r = await svc.send(t["id"], "chào Codex")
     got = await collect(q, lambda m: m.get("type") == "event" and m["method"] == "turn/completed")
     meths = [m.get("method") for m in got if m.get("type") == "event"]
@@ -267,6 +271,46 @@ async def main():
     await svc.answer_approval("x-1", "acceptForSession")
     svc.bridge.respond = real
     check("E7 giao thức cũ (execCommandApproval) → đổi sang approved_for_session", sent == [{"decision": "approved_for_session"}], sent)
+
+    # ── E8 «Cho phép, không hỏi lại trong phiên này» (user 5/10/2026) ─────────
+    # acceptForSession của Codex chỉ nhớ ĐÚNG lệnh đó, nên Codex dò 20 file là hỏi 20 lần.
+    # Cờ này nằm ở TubeCLI, theo PHIÊN CHAT, và chết theo app-server.
+    sent2 = []
+
+    async def fake_respond2(rid, result=None, error=None):
+        sent2.append(result)
+    real2 = svc.bridge.respond
+    svc.bridge.respond = fake_respond2
+    tid = t["id"]
+    svc.approvals["y-1"] = {"rid": 11, "method": "execCommandApproval",
+                            "params": {"threadId": tid, "command": "ls"}, "bridge": svc.bridge, "at": 0}
+    await svc.answer_approval("y-1", "acceptAlways")
+    check("E8 acceptAlways → nhận ngay (giao thức cũ: approved)",
+          sent2 == [{"decision": "approved"}], sent2)
+    check("E8b …và ghi sổ «không hỏi lại» cho ĐÚNG phiên đó", tid in svc.no_ask, svc.no_ask)
+    # Yêu cầu duyệt kế tiếp của phiên đó: tự nhận, KHÔNG bày thẻ hỏi nữa
+    while not q.empty():
+        q.get_nowait()
+    sent2.clear()
+    await svc._on_request({"method": "execCommandApproval", "id": 12,
+                           "params": {"threadId": tid, "command": "rg abc"}})
+    auto = await collect(q, lambda m: m.get("type") == "approval_auto", timeout=5)
+    check("E8c yêu cầu sau trong phiên đó → tự nhận, không hỏi lại",
+          sent2 == [{"decision": "approved"}] and not svc.approvals.get("%s-12" % svc._gen), sent2)
+    check("E8d …nhưng VẪN báo cho trang biết đã tự nhận cái gì",
+          any(m.get("type") == "approval_auto" and (m.get("params") or {}).get("command") == "rg abc" for m in auto),
+          auto[-2:])
+    # Phiên KHÁC không ăn theo lòng tin đó
+    sent2.clear()
+    await svc._on_request({"method": "execCommandApproval", "id": 13,
+                           "params": {"threadId": "phien-khac", "command": "rm -rf /"}})
+    check("E8e phiên KHÁC vẫn phải hỏi (lòng tin theo từng phiên)",
+          sent2 == [] and bool(svc.approvals.get("%s-13" % svc._gen)), sent2)
+    svc.approvals.pop("%s-13" % svc._gen, None)
+    # Siết lại chế độ duyệt ⇒ quên mọi «không hỏi lại» đã cho
+    svc.update_settings({"approval": "untrusted"})
+    check("E8f đổi chế độ duyệt → bỏ mọi «không hỏi lại» đã cho trước đó", not svc.no_ask, svc.no_ask)
+    svc.bridge.respond = real2
     set_ctrl()
     svc.update_settings({"approval": "never"})
     check("E8 cài đặt sai → bad_setting", await err_code(asyncio.sleep(0, result=None)) == "ok"

@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "設定で「確認しない」をオンにすると、Codex は確認なしで実行します。",
   "cg.ask_once_hint": "これは必ず確認します — 見知らぬ人にエージェントを公開し、料金を設定する操作です。",
   "cg.writable": "Codex が書き込める場所",
-  "cg.writable_note": "TubeCLI が自分の AI に許可している範囲と同じです。TubeCLI のデータは Codex からは読み取り専用です。",
+  "cg.writable_note": "TubeCLI が自分の AI に許可している範囲と、TubeCLI フォルダー（既定の作業フォルダー）です。Codex はどこでも読めます。ここでは書き込みもできます — TubeCLI の data フォルダー（キーチェーン、API キー）も含みます。",
   "cg.tools_title": "TubeCLI ツール",
   "cg.tools_on": "Codex に TubeCLI を使わせる (タスクボード、ブラウザー、拡張機能…)",
   "cg.tools_ask_label": "Codex が TubeCLI で何かを変更しようとしたとき",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "ブラウザーで入力",
   "cg.tool.browser_scroll": "ページをスクロール",
   "cg.tool.browser_nav": "戻る / 進む / 再読み込み",
-  "cg.tool.browser_close": "ブラウザーを閉じる"
+  "cg.tool.browser_close": "ブラウザーを閉じる",
+  "cg.allow_always": "許可（以後は確認しない）",
+  "cg.allow_always_hint": "このチャットの以降の要求は、アプリを再起動するまで自動で承認されます。",
+  "cg.default_folder_hint": "新しいチャットに適用されます。開いているチャットは作成時のフォルダーを保ちます。"
 }

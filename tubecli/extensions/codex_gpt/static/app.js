@@ -533,6 +533,7 @@
           : T('cg.ask_tool_hint', null, 'Turn on «Don\'t ask» in Settings to let Codex do this without asking.')) + '</div>'
         + '<div class="acts"><button type="button" class="cg-btn cg-btn-pri cg-btn-sm" data-ap="accept">' + esc(T('cg.allow', null, 'Allow')) + '</button>'
         + (p.threadId && !p.once ? '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptForSession">' + esc(T('cg.allow_session', null, 'Allow for this chat')) + '</button>' : '')
+        + (p.threadId ? '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptAlways" title="' + esc(T('cg.allow_always_hint', null, 'Every later request in this chat is approved automatically, until the app restarts.')) + '">' + esc(T('cg.allow_always', null, 'Allow, stop asking')) + '</button>' : '')
         + '<button type="button" class="cg-btn cg-btn-danger cg-btn-sm" data-ap="decline">' + esc(T('cg.deny', null, 'Deny')) + '</button></div>';
       bindApproval(el, key);
       return el;
@@ -545,6 +546,7 @@
       + (p.reason ? '<div>' + esc(p.reason) + '</div>' : '')
       + '<div class="acts"><button type="button" class="cg-btn cg-btn-pri cg-btn-sm" data-ap="accept">' + esc(T('cg.allow', null, 'Allow')) + '</button>'
       + '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptForSession">' + esc(T('cg.allow_session', null, 'Allow for this chat')) + '</button>'
+      + '<button type="button" class="cg-btn cg-btn-sm" data-ap="acceptAlways" title="' + esc(T('cg.allow_always_hint', null, 'Every later request in this chat is approved automatically, until the app restarts.')) + '">' + esc(T('cg.allow_always', null, 'Allow, stop asking')) + '</button>'
       + '<button type="button" class="cg-btn cg-btn-danger cg-btn-sm" data-ap="decline">' + esc(T('cg.deny', null, 'Deny')) + '</button></div>';
     bindApproval(el, key);
     return el;
@@ -972,7 +974,8 @@
       + '<div class="cg-field"><label>' + esc(T('cg.sandbox', null, 'Sandbox')) + '</label>'
       + sel('sBox', s.sandbox, [['workspace-write', T('cg.sb_ws', null, 'Can edit the working folder only')], ['read-only', T('cg.sb_ro', null, 'Read-only')], ['danger-full-access', T('cg.sb_full', null, 'Full access to the machine (careful)')]])
       + (st.platform === 'windows' ? '<span class="cg-hint">' + esc(T('cg.win_sandbox', null, 'On Windows the sandbox may block commands — choose full access if Codex cannot read files.')) + '</span>' : '') + '</div>'
-      + '<div class="cg-field"><label>' + esc(T('cg.default_folder', null, 'Default working folder')) + '</label><input class="cg-input mono" id="sCwd" value="' + esc(s.cwd || '') + '" placeholder="' + esc(st.workspace || '') + '"></div>'
+      + '<div class="cg-field"><label>' + esc(T('cg.default_folder', null, 'Default working folder')) + '</label><input class="cg-input mono" id="sCwd" value="' + esc(s.cwd || '') + '" placeholder="' + esc(st.default_cwd || st.workspace || '') + '">'
+      + '<span class="cg-hint">' + esc(T('cg.default_folder_hint', null, 'Applies to NEW chats - a chat already open keeps the folder it started with.')) + '</span></div>'
       + '<div class="cg-field"><span class="cg-field-label">' + esc(T('cg.writable', null, 'Codex can write to')) + '</span>'
       + '<div class="cg-roots">' + (st.writable_roots || []).map((r) => '<code>' + esc(r) + '</code>').join('') + '</div>'
       + '<span class="cg-hint">' + esc(T('cg.writable_note', null, 'The same areas TubeCLI lets its AI use. TubeCLI data stays read-only for Codex.')) + '</span></div>'

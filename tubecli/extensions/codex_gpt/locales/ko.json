@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "설정에서 «묻지 않기»를 켜면 Codex가 묻지 않고 실행합니다.",
   "cg.ask_once_hint": "Codex는 이 작업 전에 항상 묻습니다 — 낯선 사람에게 에이전트를 공개하고 가격을 정합니다.",
   "cg.writable": "Codex가 쓸 수 있는 곳",
-  "cg.writable_note": "TubeCLI가 자체 AI에 허용한 영역과 같습니다. TubeCLI 데이터는 Codex에게 읽기 전용입니다.",
+  "cg.writable_note": "TubeCLI가 자체 AI에 허용하는 영역과 TubeCLI 폴더(기본 작업 폴더)입니다. Codex는 어디서나 읽을 수 있고, 이 영역에서는 쓰기도 가능합니다 — TubeCLI data 폴더(키체인, API 키)까지 포함됩니다.",
   "cg.tools_title": "TubeCLI 도구",
   "cg.tools_on": "Codex가 TubeCLI를 사용하도록 허용 (작업 보드, 브라우저, 확장 기능…)",
   "cg.tools_ask_label": "Codex가 TubeCLI에서 무언가를 바꾸려고 할 때",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "브라우저에서 입력",
   "cg.tool.browser_scroll": "페이지 스크롤",
   "cg.tool.browser_nav": "뒤로 / 앞으로 / 새로고침",
-  "cg.tool.browser_close": "브라우저 닫기"
+  "cg.tool.browser_close": "브라우저 닫기",
+  "cg.allow_always": "허용하고 다시 묻지 않기",
+  "cg.allow_always_hint": "이 대화의 이후 요청은 앱을 다시 시작할 때까지 자동으로 승인됩니다.",
+  "cg.default_folder_hint": "새 대화에 적용됩니다. 이미 열린 대화는 시작할 때의 폴더를 유지합니다."
 }

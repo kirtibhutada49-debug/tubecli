@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "Turn on «Don't ask» in Settings to let Codex do this without asking.",
   "cg.ask_once_hint": "Codex always asks you before this — it puts an agent in front of strangers and sets prices.",
   "cg.writable": "Codex can write to",
-  "cg.writable_note": "The same areas TubeCLI lets its AI use. TubeCLI data stays read-only for Codex.",
+  "cg.writable_note": "The same areas TubeCLI lets its AI use, plus the TubeCLI folder (the default working folder). Codex can read anywhere; here it can also WRITE - including TubeCLI's data folder (keychain, API keys).",
   "cg.tools_title": "TubeCLI tools",
   "cg.tools_on": "Let Codex use TubeCLI (Task Board, browser, extensions…)",
   "cg.tools_ask_label": "When Codex wants to change something in TubeCLI",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "Type in the browser",
   "cg.tool.browser_scroll": "Scroll the page",
   "cg.tool.browser_nav": "Back / forward / reload",
-  "cg.tool.browser_close": "Close the browser"
+  "cg.tool.browser_close": "Close the browser",
+  "cg.allow_always": "Allow, stop asking",
+  "cg.allow_always_hint": "Every later request in this chat is approved automatically, until the app restarts.",
+  "cg.default_folder_hint": "Applies to NEW chats - a chat already open keeps the folder it started with."
 }

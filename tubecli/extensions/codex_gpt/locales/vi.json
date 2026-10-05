@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "Bật «Không cần hỏi» trong Cài đặt để Codex tự làm mà không hỏi.",
   "cg.ask_once_hint": "Codex luôn phải hỏi bạn việc này — nó đưa agent ra cho người lạ dùng và đặt giá.",
   "cg.writable": "Codex được ghi vào",
-  "cg.writable_note": "Đúng vùng TubeCLI cho AI của nó dùng. Dữ liệu TubeCLI chỉ đọc với Codex.",
+  "cg.writable_note": "Đúng vùng TubeCLI cho AI của nó dùng, cộng thư mục TubeCLI (thư mục làm việc mặc định). Codex đọc được mọi nơi; ở những vùng này nó còn SỬA được — kể cả thư mục data của TubeCLI (két Keychain, khoá API).",
   "cg.tools_title": "Công cụ TubeCLI",
   "cg.tools_on": "Cho Codex dùng TubeCLI (Bảng việc, trình duyệt, extension…)",
   "cg.tools_ask_label": "Khi Codex muốn thay đổi gì đó trong TubeCLI",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "Gõ trong trình duyệt",
   "cg.tool.browser_scroll": "Cuộn trang",
   "cg.tool.browser_nav": "Lùi / tiến / tải lại",
-  "cg.tool.browser_close": "Đóng trình duyệt"
+  "cg.tool.browser_close": "Đóng trình duyệt",
+  "cg.allow_always": "Cho phép, không hỏi lại",
+  "cg.allow_always_hint": "Mọi yêu cầu sau trong phiên này tự được nhận, tới khi khởi động lại ứng dụng.",
+  "cg.default_folder_hint": "Áp cho phiên MỚI — phiên đang mở giữ thư mục lúc nó được tạo."
 }

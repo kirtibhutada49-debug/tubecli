@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "在设置中打开「不再询问」，Codex 就会直接执行。",
   "cg.ask_once_hint": "此操作 Codex 一定会先问你——它会把智能体开放给陌生人并设定价格。",
   "cg.writable": "Codex 可以写入",
-  "cg.writable_note": "与 TubeCLI 允许其 AI 使用的范围相同。TubeCLI 的数据对 Codex 只读。",
+  "cg.writable_note": "与 TubeCLI 允许其 AI 使用的区域相同，另加 TubeCLI 文件夹（默认工作文件夹）。Codex 可以读取任何位置；在这些区域里它还可以写入 —— 包括 TubeCLI 的 data 文件夹（密钥库、API 密钥）。",
   "cg.tools_title": "TubeCLI 工具",
   "cg.tools_on": "让 Codex 使用 TubeCLI（任务看板、浏览器、扩展…）",
   "cg.tools_ask_label": "当 Codex 想在 TubeCLI 里做更改时",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "在浏览器中输入",
   "cg.tool.browser_scroll": "滚动页面",
   "cg.tool.browser_nav": "后退 / 前进 / 刷新",
-  "cg.tool.browser_close": "关闭浏览器"
+  "cg.tool.browser_close": "关闭浏览器",
+  "cg.allow_always": "允许，不再询问",
+  "cg.allow_always_hint": "本次会话之后的请求将自动批准，直到应用重启。",
+  "cg.default_folder_hint": "仅对新会话生效；已打开的会话保留它开始时的文件夹。"
 }

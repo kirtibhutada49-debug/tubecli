@@ -177,7 +177,7 @@
   "cg.ask_tool_hint": "Codex'in sormadan yapması için Ayarlar'da «Sorma»yı açın.",
   "cg.ask_once_hint": "Codex bunu her zaman sorar — ajanı yabancılara açar ve fiyat belirler.",
   "cg.writable": "Codex'in yazabileceği yerler",
-  "cg.writable_note": "TubeCLI'nin kendi yapay zekâsına izin verdiği alanlarla aynı. TubeCLI verileri Codex için salt okunur.",
+  "cg.writable_note": "TubeCLI'nin kendi yapay zekâsına izin verdiği alanlar ve TubeCLI klasörü (varsayılan çalışma klasörü). Codex her yeri okuyabilir; burada YAZABİLİR de - TubeCLI'nin data klasörü dâhil (anahtar kasası, API anahtarları).",
   "cg.tools_title": "TubeCLI araçları",
   "cg.tools_on": "Codex TubeCLI'yi kullanabilsin (Görev Panosu, tarayıcı, eklentiler…)",
   "cg.tools_ask_label": "Codex TubeCLI'de bir şeyi değiştirmek istediğinde",
@@ -201,5 +201,8 @@
   "cg.tool.browser_type": "Tarayıcıda yaz",
   "cg.tool.browser_scroll": "Sayfayı kaydır",
   "cg.tool.browser_nav": "Geri / ileri / yenile",
-  "cg.tool.browser_close": "Tarayıcıyı kapat"
+  "cg.tool.browser_close": "Tarayıcıyı kapat",
+  "cg.allow_always": "İzin ver, bir daha sorma",
+  "cg.allow_always_hint": "Bu sohbetteki sonraki istekler, uygulama yeniden başlayana kadar otomatik onaylanır.",
+  "cg.default_folder_hint": "YENİ sohbetler için geçerlidir; açık sohbet başladığı klasörü korur."
 }
