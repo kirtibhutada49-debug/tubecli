@@ -54,7 +54,7 @@
   "cloud_api.muse_setup": "⚙ Set up",
   "cloud_api.muse_profile_tag": "Profile: {profile}",
   "cloud_api.muse_title": "Muse browser session",
-  "cloud_api.muse_hint": "Muse has no API key: TubeCLI types into muse.ai inside a browser profile that is signed in to it. Pick that profile. A closed profile opens in the background on the first request, and Muse answers one request at a time.",
+  "cloud_api.muse_hint": "Muse has no API key: TubeCLI types into muse.ai inside a browser profile that is signed in to it. Pick that profile. A closed profile opens in the background on the first request. Each account answers one request at a time — add more accounts below to draw several pictures at once.",
   "cloud_api.muse_profile": "Browser profile",
   "cloud_api.muse_pick": "— pick a profile —",
   "cloud_api.muse_turns": "Requests per side chat",
@@ -69,5 +69,10 @@
   "cloud_api.muse_ok": "✅ {profile} is signed in to muse.ai.",
   "cloud_api.muse_not_signed": "❌ {profile} is not signed in to muse.ai — open the profile, sign in to muse.ai, then check again.",
   "cloud_api.muse_test_running": "Asking Muse…",
-  "cloud_api.muse_test_ok": "✅ Muse answered in {s}s: {reply}"
+  "cloud_api.muse_test_ok": "✅ Muse answered in {s}s: {reply}",
+  "cloud_api.muse_extra": "More accounts (draw in parallel)",
+  "cloud_api.muse_extra_hint": "Tick other browser profiles, each signed in to a different muse.ai account. Requests are spread over all accounts — 3 accounts draw 3 pictures at once.",
+  "cloud_api.muse_lanes": "Requests at once per account",
+  "cloud_api.muse_lanes_hint": "Keep 1 to be safe. 2 worked in a short test, but Muse may slow down or flag an account that sends many requests at once.",
+  "cloud_api.muse_saved_pool": "Saved — Muse uses {profile} and {n} more account(s)."
 }

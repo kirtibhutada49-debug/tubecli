@@ -54,7 +54,7 @@
   "cloud_api.muse_setup": "⚙ Cấu hình",
   "cloud_api.muse_profile_tag": "Hồ sơ: {profile}",
   "cloud_api.muse_title": "Phiên trình duyệt Muse",
-  "cloud_api.muse_hint": "Muse không có API key: TubeCLI gõ vào muse.ai trong một hồ sơ trình duyệt đã đăng nhập muse.ai. Chọn hồ sơ đó. Hồ sơ đang tắt sẽ tự mở ẩn ở lượt gọi đầu tiên, và Muse trả lời từng lượt một.",
+  "cloud_api.muse_hint": "Muse không có API key: TubeCLI gõ vào muse.ai trong một hồ sơ trình duyệt đã đăng nhập muse.ai. Chọn hồ sơ đó. Hồ sơ đang tắt sẽ tự mở ẩn ở lượt gọi đầu tiên. Mỗi tài khoản trả lời từng lượt một — thêm tài khoản bên dưới để vẽ nhiều ảnh cùng lúc.",
   "cloud_api.muse_profile": "Hồ sơ trình duyệt",
   "cloud_api.muse_pick": "— chọn hồ sơ —",
   "cloud_api.muse_turns": "Số lượt mỗi chat phụ",
@@ -69,5 +69,10 @@
   "cloud_api.muse_ok": "✅ {profile} đã đăng nhập muse.ai.",
   "cloud_api.muse_not_signed": "❌ {profile} chưa đăng nhập muse.ai — mở hồ sơ, đăng nhập muse.ai rồi kiểm tra lại.",
   "cloud_api.muse_test_running": "Đang hỏi Muse…",
-  "cloud_api.muse_test_ok": "✅ Muse trả lời sau {s} giây: {reply}"
+  "cloud_api.muse_test_ok": "✅ Muse trả lời sau {s} giây: {reply}",
+  "cloud_api.muse_extra": "Thêm tài khoản (vẽ song song)",
+  "cloud_api.muse_extra_hint": "Tích các hồ sơ trình duyệt khác, mỗi hồ sơ đăng nhập một tài khoản muse.ai khác nhau. Các lượt được chia cho mọi tài khoản — 3 tài khoản vẽ 3 ảnh cùng lúc.",
+  "cloud_api.muse_lanes": "Số lượt cùng lúc mỗi tài khoản",
+  "cloud_api.muse_lanes_hint": "Để 1 cho an toàn. Thử ngắn với 2 vẫn chạy được, nhưng Muse có thể chậm lại hoặc đánh dấu tài khoản gửi nhiều lượt cùng lúc.",
+  "cloud_api.muse_saved_pool": "Đã lưu — Muse dùng {profile} và thêm {n} tài khoản."
 }

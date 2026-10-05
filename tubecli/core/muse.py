@@ -8,8 +8,10 @@ một hồ sơ trình duyệt TubeCLI đã đăng nhập (extensions/browser/mus
 chạy — cách làm của github.com/duclm1x1/Muse-Chat-MCP). Mô-đun này là MỘT chỗ biết:
 
   * hồ sơ nào giữ phiên Muse (cài đặt `muse_profile` trong global_settings.json, chọn ở Cloud API Keys)
+    + các hồ sơ PHỤ `muse_extra_profiles` — mỗi hồ sơ một tài khoản Muse khác (5/10/2026)
   * mở hồ sơ ấy ẨN khi nó đang tắt (như youtube_cookies), rồi để nó sống tối đa HIDDEN_SESSION_MAX
-  * mỗi lúc MỘT lượt (một tài khoản Muse = một người gõ) — _LOCK
+  * mỗi tài khoản mỗi lúc `muse_lanes` lượt (mặc định MỘT — một tài khoản Muse = một người gõ); nhiều tài
+    khoản thì nhiều lượt chạy cùng lúc — xem _acquire
   * gõ vào chat phụ nào: dùng lại một chat phụ cho `muse_turns_per_chat` lượt rồi mở chat phụ mới
     (mỗi lượt một chat phụ thì danh sách chat của người dùng ngập rác; dồn hết vào một chat thì ngữ
     cảnh cũ lẫn vào câu trả lời và trang nặng dần)
@@ -53,7 +55,20 @@ HIDDEN_SESSION_MAX = 1800
 ASPECTS = {"16:9": "landscape", "9:16": "vertical portrait", "1:1": "square",
            "4:3": "landscape", "3:4": "portrait"}
 
-_LOCK = threading.Lock()
+# Một tài khoản chạy song song tối đa chừng này lượt (mỗi lượt một chat phụ riêng). Mặc định 1: chưa đo Muse có
+# chịu nhiều lượt cùng tài khoản không — muốn nhanh thì thêm TÀI KHOẢN (hồ sơ phụ), không thêm lượt.
+MAX_LANES = 3
+# Hồ sơ hỏng (trình duyệt không mở / chưa đăng nhập) bị bỏ qua chừng này giây, lượt đi sang tài khoản khác.
+DOWN_SECONDS = 600
+
+# Chỗ ngồi: mỗi (hồ sơ, lượt) một khoá. User 5/10/2026: «có 3 tài khoản có thể tạo cùng lúc 3 ảnh cho nhanh hơn
+# không?» — Studio vốn gửi 3 ảnh song song (DRAW_LANES) mà trước đây cả 3 xếp hàng sau MỘT _LOCK.
+_POOL = threading.Condition()
+_BUSY: Dict[str, str] = {}          # khoá chỗ ngồi → hồ sơ đang chạy ở đó
+_LAST_USED: Dict[str, float] = {}
+_DOWN: Dict[str, float] = {}        # hồ sơ → hết hạn bỏ qua
+_THREAD_OWNER: Dict[str, str] = {}  # chat phụ → hồ sơ (chat của tài khoản A không mở được ở tài khoản B)
+_STATE_LOCK = threading.Lock()
 
 
 class MuseError(Exception):
@@ -79,14 +94,32 @@ def _clamp_turns(v) -> int:
     return max(1, min(MAX_TURNS_PER_CHAT, n))
 
 
+def _clamp_lanes(v) -> int:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(MAX_LANES, n))
+
+
 def settings() -> dict:
-    """{profile, turns_per_chat}. profile "" = chưa chọn hồ sơ nào."""
+    """{profile, extra_profiles, pool, lanes, turns_per_chat}. profile "" = chưa chọn hồ sơ nào.
+
+    pool = hồ sơ chính + hồ sơ phụ (không trùng), theo thứ tự; chưa có hồ sơ chính thì pool rỗng."""
     try:
         from tubecli.config import read_global_settings
         g = read_global_settings()
     except Exception:      # noqa: BLE001
         g = {}
-    return {"profile": str(g.get("muse_profile") or "").strip(),
+    profile = str(g.get("muse_profile") or "").strip()
+    extra = g.get("muse_extra_profiles")
+    pool = [profile] if profile else []
+    for p in (extra if isinstance(extra, list) else []):
+        p = str(p or "").strip()
+        if profile and p and p not in pool:
+            pool.append(p)
+    return {"profile": profile, "extra_profiles": pool[1:], "pool": pool,
+            "lanes": _clamp_lanes(g.get("muse_lanes")),
             "turns_per_chat": _clamp_turns(g.get("muse_turns_per_chat"))}
 
 
@@ -95,16 +128,29 @@ def _profiles_dir() -> str:
     return str(PROFILES_DIR)
 
 
-def set_settings(profile: Optional[str] = None, turns_per_chat: Optional[int] = None) -> dict:
+def _check_profile(p: str) -> str:
+    p = str(p or "").strip()
+    if p and (p in (".", "..") or "/" in p or "\\" in p or not os.path.isdir(os.path.join(_profiles_dir(), p))):
+        raise ValueError(f"Browser profile '{p}' does not exist on this machine.")
+    return p
+
+
+def set_settings(profile: Optional[str] = None, turns_per_chat: Optional[int] = None,
+                 extra_profiles: Optional[List[str]] = None, lanes: Optional[int] = None) -> dict:
     """Chỉ ghi khoá được truyền. Hồ sơ phải có thật (tên gõ sai = mọi lượt hỏng mà trông như đã cấu hình)."""
     from tubecli.config import set_global_setting
     if profile is not None:
-        p = str(profile or "").strip()
-        if p:
-            if p in (".", "..") or "/" in p or "\\" in p or not os.path.isdir(os.path.join(_profiles_dir(), p)):
-                raise ValueError(f"Browser profile '{p}' does not exist on this machine.")
         # Đổi hồ sơ = đổi tài khoản: pick_thread thấy state["profile"] khác nên tự mở chat phụ mới.
-        set_global_setting("muse_profile", p)
+        set_global_setting("muse_profile", _check_profile(profile))
+    if extra_profiles is not None:
+        names: List[str] = []
+        for p in extra_profiles:
+            p = _check_profile(p)
+            if p and p not in names:
+                names.append(p)
+        set_global_setting("muse_extra_profiles", names)
+    if lanes is not None:
+        set_global_setting("muse_lanes", _clamp_lanes(lanes))
     if turns_per_chat is not None:
         set_global_setting("muse_turns_per_chat", _clamp_turns(turns_per_chat))
     return settings()
@@ -147,6 +193,24 @@ def _save_state(d: dict) -> None:
         os.replace(tmp, path)
     except Exception as e:      # noqa: BLE001
         logger.warning("muse: could not save chat state: %s", e)
+
+
+def _slot_state(all_state: dict, key: str) -> dict:
+    """Trạng thái chat phụ của MỘT chỗ ngồi. File cũ (một hồ sơ, dạng phẳng) vẫn đọc được: nó là chỗ của hồ sơ ấy."""
+    slots = all_state.get("slots")
+    if isinstance(slots, dict):
+        s = slots.get(key)
+        return s if isinstance(s, dict) else {}
+    return all_state if all_state.get("profile") == key else {}
+
+
+def _save_slot(key: str, slot: dict) -> None:
+    with _STATE_LOCK:
+        d = _load_state()
+        slots = d.get("slots") if isinstance(d.get("slots"), dict) else (
+            {d["profile"]: d} if d.get("profile") else {})
+        slots[key] = slot
+        _save_state({"slots": slots})
 
 
 def pick_thread(state: dict, profile: str, turns_per_chat: int, fresh: bool = False) -> str:
@@ -370,27 +434,16 @@ def parse_tool_output(stdout: str, stderr: str = "") -> dict:
 
 # ── trạng thái + một lượt hỏi ─────────────────────────────────────────────────
 
-def status() -> dict:
-    """Không mở trình duyệt, không gõ gì: {configured, profile, running, logged_in, verified, message}."""
-    st = settings()
-    profile = st["profile"]
-    out = {"provider": PROVIDER, "configured": bool(profile), "profile": profile,
-           "turns_per_chat": st["turns_per_chat"], "running": False, "logged_in": None, "verified": False,
-           "models": CHAT_MODELS, "image_models": IMAGE_MODELS, "busy": _LOCK.locked(), "message": ""}
-    state = _load_state()
-    if state.get("profile") == profile and state.get("thread"):
-        out["thread"] = state.get("thread")
-        out["thread_turns"] = int(state.get("turns") or 0)
-    if not profile:
-        out["message"] = "Pick the browser profile that is signed in to muse.ai."
-        return out
+def _profile_status(profile: str, busy: bool) -> dict:
+    """Trạng thái MỘT hồ sơ: {profile, running, logged_in, verified, busy, message}. Không mở trình duyệt."""
+    out = {"profile": profile, "running": False, "logged_in": None, "verified": False, "busy": busy, "message": ""}
     port = _cdp_port(profile)
     if not port:
         # Tắt KHÔNG phải hỏng: lượt hỏi đầu tiên tự mở nó ẩn.
         out["message"] = f"Browser profile '{profile}' is closed — it opens in the background on the first request."
         return out
     out["running"] = True
-    if _LOCK.locked():
+    if busy:
         out["message"] = "Muse is answering another request."
         return out
     res = run_tool(port, "status", timeout=20)
@@ -404,26 +457,107 @@ def status() -> dict:
     return out
 
 
+def _busy_by_profile() -> Dict[str, int]:
+    with _POOL:
+        out: Dict[str, int] = {}
+        for p in _BUSY.values():
+            out[p] = out.get(p, 0) + 1
+        return out
+
+
+def status() -> dict:
+    """Không mở trình duyệt, không gõ gì: {configured, profile, running, logged_in, verified, message, pool[…]}.
+
+    Các trường cấp ngoài là của hồ sơ CHÍNH (như trước); `pool` có một dòng cho mỗi tài khoản."""
+    st = settings()
+    profile = st["profile"]
+    busy_by = _busy_by_profile()
+    seats = len(st["pool"]) * st["lanes"]
+    out = {"provider": PROVIDER, "configured": bool(profile), "profile": profile,
+           "extra_profiles": st["extra_profiles"], "lanes": st["lanes"],
+           "turns_per_chat": st["turns_per_chat"], "running": False, "logged_in": None, "verified": False,
+           "models": CHAT_MODELS, "image_models": IMAGE_MODELS,
+           "busy": bool(seats) and sum(busy_by.values()) >= seats, "message": "", "pool": []}
+    slot = _slot_state(_load_state(), profile) if profile else {}
+    if slot.get("thread"):
+        out["thread"] = slot.get("thread")
+        out["thread_turns"] = int(slot.get("turns") or 0)
+    if not profile:
+        out["message"] = "Pick the browser profile that is signed in to muse.ai."
+        return out
+    now = time.time()
+    for p in st["pool"]:
+        row = _profile_status(p, busy_by.get(p, 0) >= st["lanes"])
+        row["down"] = _DOWN.get(p, 0) > now
+        out["pool"].append(row)
+    first = out["pool"][0]
+    out.update(running=first["running"], logged_in=first["logged_in"], verified=first["verified"],
+               message=first["message"])
+    return out
+
+
+def _acquire(pool: List[str], lanes: int, want: str = "", timeout: float = QUEUE_WAIT):
+    """Giữ MỘT chỗ ngồi → (hồ sơ, khoá chỗ). Chọn tài khoản ít lượt đang chạy nhất, rồi lâu chưa dùng nhất — các
+    lượt xoay vòng qua mọi tài khoản. Tài khoản đang hỏng (_DOWN) bị bỏ qua, trừ khi tài khoản nào cũng hỏng.
+    want: chat phụ của tài khoản nào thì PHẢI chạy ở tài khoản đó."""
+    deadline = time.time() + timeout
+    with _POOL:
+        while True:
+            now = time.time()
+            live = [want] if want else ([p for p in pool if _DOWN.get(p, 0) <= now] or list(pool))
+            load: Dict[str, int] = {}
+            for p in _BUSY.values():
+                load[p] = load.get(p, 0) + 1
+            free = []
+            for p in live:
+                for i in range(max(1, lanes)):
+                    k = p if i == 0 else f"{p}#{i + 1}"
+                    if k not in _BUSY:
+                        free.append((load.get(p, 0), _LAST_USED.get(p, 0.0), k, p))
+            if free:
+                free.sort()
+                _, _, k, p = free[0]
+                _BUSY[k] = p
+                _LAST_USED[p] = now
+                return p, k
+            left = deadline - now
+            if left <= 0:
+                raise MuseError("busy", "Muse has been busy with other requests for too long.")
+            _POOL.wait(min(left, 5))
+
+
+def _release(key: str) -> None:
+    with _POOL:
+        _BUSY.pop(key, None)
+        _POOL.notify_all()
+
+
 def ask(prompt: str, *, want_images: bool = False, files: Optional[List[str]] = None,
         image_dir: str = "", max_images: int = 1, timeout: int = CHAT_TIMEOUT, fresh: bool = False,
         launch: bool = True, want_videos: bool = False, video_dir: str = "", max_videos: int = 1,
-        thread_id: str = "") -> dict:
-    """Một lượt hỏi Muse → kết quả của muse_tool (text, images, videos, thread_id…). Ném MuseError.
+        thread_id: str = "", _failover: bool = True) -> dict:
+    """Một lượt hỏi Muse → kết quả của muse_tool (text, images, videos, thread_id, profile…). Ném MuseError.
 
     thread_id: gõ vào ĐÚNG chat phụ này (chuỗi clip nối tiếp phải ở cùng một chat để Muse giữ mạch), bỏ qua
-    chat phụ dùng chung; "" = chat phụ dùng chung như thường."""
+    chat phụ dùng chung; "" = chat phụ dùng chung như thường. Chat phụ thuộc về tài khoản đã mở nó.
+    Tài khoản hỏng trình duyệt / chưa đăng nhập: bỏ qua nó DOWN_SECONDS và thử lại MỘT lần ở tài khoản khác."""
     st = settings()
     profile = st["profile"]
     if not profile:
         raise MuseError("config", "Muse is not set up: pick the browser profile that is signed in to muse.ai "
                                   "in Cloud API Keys → Muse.")
-    if not _LOCK.acquire(timeout=QUEUE_WAIT):
-        raise MuseError("busy", "Muse has been busy with other requests for too long.")
+    pool = st["pool"]
+    own = bool(thread_id)
+    pinned = own and thread_id != "new"
+    want = (_THREAD_OWNER.get(thread_id) or profile) if pinned else ""
+    if want and want not in pool:
+        want = ""
+    prof, key = _acquire(pool, st["lanes"], want)
+    failed: Optional[MuseError] = None
     try:
-        port = ensure_browser(profile, launch=launch)
-        state = _load_state()
-        own = bool(thread_id)
-        thread = thread_id if own else pick_thread(state, profile, st["turns_per_chat"], fresh)
+        port = ensure_browser(prof, launch=launch)
+        slot = _slot_state(_load_state(), key)
+        thread = thread_id if own else pick_thread(slot, prof, st["turns_per_chat"], fresh)
         req = {"prompt": prompt, "thread": thread, "timeout_ms": int(timeout * 1000),
                "want_images": bool(want_images), "max_images": int(max_images or 1),
                "image_dir": image_dir or "", "files": list(files or []),
@@ -435,12 +569,26 @@ def ask(prompt: str, *, want_images: bool = False, files: Optional[List[str]] = 
             thread, req["thread"] = "new", "new"
             res = run_tool(port, "ask", req, timeout=timeout)
         if not own:
-            _save_state(next_state(state if thread != "new" else {}, profile, thread, res))
+            _save_slot(key, next_state(slot if thread != "new" else {}, prof, thread, res))
+        if res.get("thread_id"):
+            _THREAD_OWNER[str(res["thread_id"])] = prof
         if not res.get("ok"):
             raise MuseError(str(res.get("kind") or "error"), str(res.get("error") or "Muse request failed."))
+        _DOWN.pop(prof, None)
+        res["profile"] = prof
         return res
+    except MuseError as e:
+        failed = e
     finally:
-        _LOCK.release()
+        _release(key)
+    if failed.kind in ("browser", "auth") and len(pool) > 1:
+        _DOWN[prof] = time.time() + DOWN_SECONDS
+        if _failover and not pinned:
+            logger.warning("muse: account %s unusable (%s) — trying another account", prof, failed)
+            return ask(prompt, want_images=want_images, files=files, image_dir=image_dir, max_images=max_images,
+                       timeout=timeout, fresh=fresh, launch=launch, want_videos=want_videos, video_dir=video_dir,
+                       max_videos=max_videos, thread_id=thread_id, _failover=False)
+    raise failed
 
 
 # ── chat kiểu OpenAI ──────────────────────────────────────────────────────────

@@ -106,7 +106,8 @@ r = M.parse_tool_output("", "Error: Cannot find module 'playwright'\n")
 ok(not r["ok"] and "Cannot find module" in r["error"], "không có dấu → lỗi kèm dòng stderr cuối", r)
 r = M.parse_tool_output("__MUSE_RESULT__{bad__MUSE_END__")
 ok(not r["ok"] and "bad JSON" in r["error"], "JSON hỏng", r)
-ok(M.settings() == {"profile": "", "turns_per_chat": M.DEFAULT_TURNS_PER_CHAT}, "mặc định: chưa chọn hồ sơ")
+ok(M.settings() == {"profile": "", "extra_profiles": [], "pool": [], "lanes": 1,
+                    "turns_per_chat": M.DEFAULT_TURNS_PER_CHAT}, "mặc định: chưa chọn hồ sơ, một lượt mỗi tài khoản")
 try:
     M.set_settings(profile="nope")
     ok(False, "hồ sơ không có → ValueError")
@@ -117,7 +118,9 @@ try:
     ok(False, "tên đi ngược thư mục → ValueError")
 except ValueError:
     ok(True, "tên đi ngược thư mục → ValueError")
-ok(M.set_settings(profile="chayagent", turns_per_chat=999) == {"profile": "chayagent", "turns_per_chat": M.MAX_TURNS_PER_CHAT},
+ok(M.set_settings(profile="chayagent", turns_per_chat=999) == {"profile": "chayagent", "extra_profiles": [],
+                                                               "pool": ["chayagent"], "lanes": 1,
+                                                               "turns_per_chat": M.MAX_TURNS_PER_CHAT},
    "lưu hồ sơ + kẹp số lượt")
 ok(M.set_settings(turns_per_chat=0)["turns_per_chat"] == 1 and M.settings()["profile"] == "chayagent",
    "chỉ ghi khoá được truyền; số lượt ≥ 1")
@@ -139,10 +142,17 @@ def tool_ok(port, action, req=None, timeout=60):
 
 M.run_tool = tool_ok
 STATE.write_text("{}", encoding="utf-8")
+
+
+def SL(key="chayagent"):
+    """Trạng thái chat phụ của một chỗ ngồi (file trạng thái nay chia theo chỗ: {"slots": {...}})."""
+    return json.loads(STATE.read_text()).get("slots", {}).get(key, {})
+
+
 r = M.ask("q1")
 ok(r["text"] == "hello" and calls[-1]["thread"] == "new", "lượt đầu mở chat mới", calls[-1])
 M.ask("q2")
-ok(calls[-1]["thread"] == "T-new-1" and json.loads(STATE.read_text())["turns"] == 2, "lượt sau gõ tiếp chat ấy",
+ok(calls[-1]["thread"] == "T-new-1" and SL()["turns"] == 2, "lượt sau gõ tiếp chat ấy",
    STATE.read_text())
 
 
@@ -157,7 +167,7 @@ M.run_tool = tool_dead_then_ok
 n0 = len(calls)
 r = M.ask("q3")
 ok(r["text"] == "fresh" and [c["thread"] for c in calls[n0:]] == ["T-new-1", "new"]
-   and json.loads(STATE.read_text()) .get("thread") == "T-fresh", "chat phụ hỏng → thử lại chat mới MỘT lần",
+   and SL().get("thread") == "T-fresh", "chat phụ hỏng → thử lại chat mới MỘT lần",
    [c["thread"] for c in calls[n0:]])
 M.run_tool = lambda port, action, req=None, timeout=60: {"ok": False, "kind": "auth", "error": "not signed in"}
 try:
@@ -165,7 +175,7 @@ try:
     ok(False, "lỗi đăng nhập → MuseError(auth)")
 except M.MuseError as e:
     ok(e.kind == "auth" and "not signed in" in str(e), "lỗi đăng nhập → MuseError(auth)", e.kind)
-ok(not M._LOCK.locked(), "khoá được nhả sau lỗi")
+ok(not M._BUSY, "chỗ ngồi được nhả sau lỗi")
 M.set_settings(profile="")
 try:
     M.ask("q5")
@@ -226,7 +236,7 @@ def tool_vid(port, action, req=None, timeout=60):
 M.run_tool = tool_vid
 vd = Path(tempfile.mkdtemp(dir=TMP))
 (TMP / "p.jpg").write_bytes(b"\xff\xd8\xffx")
-cur_thread = json.loads(STATE.read_text()).get("thread")      # chat phụ dùng chung đang mở (từ nhóm E)
+cur_thread = SL().get("thread")      # chat phụ dùng chung đang mở (từ nhóm E)
 v = M.generate_video_clip("the boy walks down the hallway", str(vd), [str(TMP / "p.jpg")], "9:16")
 ok(v["path"].endswith(".mp4") and v["duration"] == 10 and v["thread_id"] == "T-vid", "generate_video_clip trả clip", v)
 ok(seen_v.get("want_videos") and seen_v.get("video_dir") == str(vd) and seen_v.get("thread") == cur_thread
@@ -235,9 +245,9 @@ ok(seen_v.get("want_videos") and seen_v.get("video_dir") == str(vd) and seen_v.g
 v2 = M.generate_video_clip("continue", str(vd), [], "9:16", continue_from=True, thread_id="T-vid")
 ok(seen_v.get("thread") == "T-vid" and "final frame of the previous shot" in seen_v["prompt"],
    "clip nối tiếp: đúng chat phụ đã chỉ + khung đầu phải trùng khung cuối", seen_v.get("thread"))
-ok(json.loads(STATE.read_text()).get("thread") == "T-vid", "lượt đầu KHÔNG chỉ chat → dùng chat chung và ghi thread mới")
+ok(SL().get("thread") == "T-vid", "lượt đầu KHÔNG chỉ chat → dùng chat chung và ghi thread mới")
 v3 = M.generate_video_clip("again", str(vd), [], "9:16", continue_from=True, thread_id="T-own")
-ok(seen_v.get("thread") == "T-own" and json.loads(STATE.read_text()).get("thread") == "T-vid",
+ok(seen_v.get("thread") == "T-own" and SL().get("thread") == "T-vid",
    "thread_id riêng KHÔNG ghi đè chat phụ dùng chung")
 M.run_tool = lambda port, action, req=None, timeout=60: {"ok": True, "text": "I can't make videos of real people.",
                                                          "images": [], "videos": [], "thread_id": "T"}

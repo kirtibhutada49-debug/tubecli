@@ -50,6 +50,8 @@ def _profile_names() -> List[str]:
 class MuseSettingsRequest(BaseModel):
     profile: Optional[str] = None          # None = giữ nguyên; "" = bỏ chọn
     turns_per_chat: Optional[int] = None
+    extra_profiles: Optional[List[str]] = None   # tài khoản Muse PHỤ (mỗi hồ sơ một tài khoản) — vẽ song song
+    lanes: Optional[int] = None                  # lượt cùng lúc MỖI tài khoản (1 = an toàn)
 
 
 @router.get("/status")
@@ -60,13 +62,15 @@ async def api_status():
 @router.get("/settings")
 async def api_get_settings():
     return {**muse.settings(), "profiles": _profile_names(),
-            "default_turns_per_chat": muse.DEFAULT_TURNS_PER_CHAT, "max_turns_per_chat": muse.MAX_TURNS_PER_CHAT}
+            "default_turns_per_chat": muse.DEFAULT_TURNS_PER_CHAT, "max_turns_per_chat": muse.MAX_TURNS_PER_CHAT,
+            "max_lanes": muse.MAX_LANES}
 
 
 @router.put("/settings")
 async def api_put_settings(req: MuseSettingsRequest):
     try:
-        return muse.set_settings(profile=req.profile, turns_per_chat=req.turns_per_chat)
+        return muse.set_settings(profile=req.profile, turns_per_chat=req.turns_per_chat,
+                                 extra_profiles=req.extra_profiles, lanes=req.lanes)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

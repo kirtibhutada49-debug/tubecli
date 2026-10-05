@@ -2919,6 +2919,11 @@ async function _renderMusePanel() {
     const opts = [`<option value="">${esc(T('cloud_api.muse_pick'))}</option>`]
         .concat(profiles.map(n => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}</option>`));
     if (cur && !profiles.includes(cur)) opts.push(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+    // Tài khoản PHỤ: mỗi hồ sơ một tài khoản muse.ai khác — vẽ song song (5/10/2026).
+    const extra = st.extra_profiles || [];
+    const extraBoxes = profiles.concat(extra.filter(n => !profiles.includes(n))).map(n => `
+        <label class="muse-extra-row" data-profile="${esc(n)}" style="display:${n === cur ? 'none' : 'inline-flex'};align-items:center;gap:4px;font-size:.78rem;margin-right:12px;">
+            <input type="checkbox" class="muse-extra-cb" value="${esc(n)}" ${extra.includes(n) ? 'checked' : ''}> ${esc(n)}</label>`).join('');
     panel.innerHTML = `
         <div style="font-weight:600;font-size:.86rem;margin-bottom:4px;">🎨 ${esc(T('cloud_api.muse_title'))}</div>
         <div class="text-muted" style="font-size:.78rem;margin-bottom:8px;">${esc(T('cloud_api.muse_hint'))}</div>
@@ -2929,12 +2934,26 @@ async function _renderMusePanel() {
                 <input id="muse-turns-input" type="number" min="1" max="${st.max_turns_per_chat || 100}" value="${st.turns_per_chat || st.default_turns_per_chat || 10}" style="width:100%;margin-top:3px;"></label>
         </div>
         <div class="text-muted" style="font-size:.74rem;margin-top:4px;">${esc(T('cloud_api.muse_turns_hint'))}</div>
+        <div style="margin-top:10px;font-size:.78rem;font-weight:600;">${esc(T('cloud_api.muse_extra'))}</div>
+        <div class="text-muted" style="font-size:.74rem;margin:2px 0 4px;">${esc(T('cloud_api.muse_extra_hint'))}</div>
+        <div id="muse-extra-list" style="display:flex;flex-wrap:wrap;row-gap:4px;">${extraBoxes}</div>
+        <label style="display:block;width:220px;font-size:.78rem;margin-top:8px;" title="${esc(T('cloud_api.muse_lanes_hint'))}">${esc(T('cloud_api.muse_lanes'))}
+            <input id="muse-lanes-input" type="number" min="1" max="${st.max_lanes || 3}" value="${st.lanes || 1}" style="width:100%;margin-top:3px;"></label>
+        <div class="text-muted" style="font-size:.74rem;margin-top:4px;">${esc(T('cloud_api.muse_lanes_hint'))}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
             <button class="btn-sm" type="button" style="background:#5276EB;color:#fff;border:none;" onclick="window.saveMuseSettings(this)">${esc(T('cloud_api.muse_save'))}</button>
             <button class="btn-sm" type="button" onclick="window.checkMuseStatus(this)">${esc(T('cloud_api.muse_check'))}</button>
             <button class="btn-sm" type="button" onclick="window.testMuseChat(this)">${esc(T('cloud_api.muse_test'))}</button>
         </div>
         <div id="muse-panel-result" style="font-size:.8rem;margin-top:6px;white-space:pre-wrap;word-break:break-word;"></div>`;
+    // Hồ sơ chính không được là hồ sơ phụ của chính nó: đổi hồ sơ chính thì ẩn ô tương ứng.
+    document.getElementById('muse-profile-select')?.addEventListener('change', (ev) => {
+        panel.querySelectorAll('.muse-extra-row').forEach(row => {
+            const mine = row.dataset.profile === ev.target.value;
+            row.style.display = mine ? 'none' : 'inline-flex';
+            if (mine) row.querySelector('input').checked = false;
+        });
+    });
 }
 
 function _museSay(ok, text) {
@@ -2947,11 +2966,17 @@ function _museSay(ok, text) {
 window.saveMuseSettings = async function(btn) {
     const profile = document.getElementById('muse-profile-select')?.value || '';
     const turns = parseInt(document.getElementById('muse-turns-input')?.value || '0', 10) || null;
+    const lanes = parseInt(document.getElementById('muse-lanes-input')?.value || '0', 10) || null;
+    const extra_profiles = Array.from(document.querySelectorAll('#muse-extra-list .muse-extra-cb:checked'))
+        .map(cb => cb.value).filter(n => n && n !== profile);
     btn.disabled = true;
     try {
-        const r = await apiPut('/api/v1/muse/settings', { profile, turns_per_chat: turns });
+        const r = await apiPut('/api/v1/muse/settings', { profile, turns_per_chat: turns, extra_profiles, lanes });
         if (r && r.profile !== undefined && !r.detail) {
-            _museSay(true, r.profile ? T('cloud_api.muse_saved', { profile: r.profile }) : T('cloud_api.muse_cleared'));
+            const more = (r.extra_profiles || []).length;
+            _museSay(true, !r.profile ? T('cloud_api.muse_cleared')
+                : more ? T('cloud_api.muse_saved_pool', { profile: r.profile, n: more })
+                : T('cloud_api.muse_saved', { profile: r.profile }));
             const meta = (window._cloudProviders || []).find(p => p.id === currentEditProvider);
             if (meta) { meta.profile = r.profile; meta.has_key = !!r.profile; }
             renderCloudApiExt(_cloudExtBody());
@@ -2968,11 +2993,16 @@ window.checkMuseStatus = async function(btn) {
     try {
         const r = await apiGet('/api/v1/muse/status') || {};
         const profile = r.profile || '';
+        // Một dòng cho MỖI tài khoản (hồ sơ chính + phụ); server cũ không có `pool` thì chỉ hồ sơ chính.
+        const rows = (r.pool && r.pool.length) ? r.pool : [r];
+        const line = (x) => !x.running ? T('cloud_api.muse_closed', { profile: x.profile })
+            : x.logged_in ? T('cloud_api.muse_ok', { profile: x.profile })
+            : x.logged_in === false ? T('cloud_api.muse_not_signed', { profile: x.profile })
+            : `${x.profile}: ${x.message || '?'}`;
         if (!r.configured) _museSay(false, T('cloud_api.muse_pick_first'));
-        else if (!r.running) _museSay(null, T('cloud_api.muse_closed', { profile }));
-        else if (r.logged_in) _museSay(true, T('cloud_api.muse_ok', { profile }));
-        else if (r.logged_in === false) _museSay(false, T('cloud_api.muse_not_signed', { profile }));
-        else _museSay(null, r.message || '?');
+        else if (rows.some(x => x.logged_in === false)) _museSay(false, rows.map(line).join('\n'));
+        else if (rows.every(x => x.logged_in)) _museSay(true, rows.map(line).join('\n'));
+        else _museSay(null, rows.map(line).join('\n') || profile);
     } catch (e) { _museSay(false, '❌ ' + e.message); }
     btn.disabled = false;
 };

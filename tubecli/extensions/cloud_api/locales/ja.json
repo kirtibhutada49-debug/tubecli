@@ -54,7 +54,7 @@
   "cloud_api.muse_setup": "⚙ 設定",
   "cloud_api.muse_profile_tag": "プロファイル: {profile}",
   "cloud_api.muse_title": "Muse ブラウザーセッション",
-  "cloud_api.muse_hint": "Muse には API キーがありません。TubeCLI は muse.ai にログイン済みのブラウザープロファイル内で muse.ai に入力します。そのプロファイルを選んでください。閉じているプロファイルは最初のリクエストでバックグラウンドで開き、Muse は 1 件ずつ応答します。",
+  "cloud_api.muse_hint": "Muse には API キーがありません。TubeCLI は muse.ai にログイン済みのブラウザープロファイル内で muse.ai に入力します。そのプロファイルを選んでください。閉じているプロファイルは最初のリクエストでバックグラウンドで開きます。各アカウントは 1 件ずつ応答します。下でアカウントを追加すると、複数の画像を同時に描けます。",
   "cloud_api.muse_profile": "ブラウザープロファイル",
   "cloud_api.muse_pick": "— プロファイルを選択 —",
   "cloud_api.muse_turns": "サイドチャットあたりのリクエスト数",
@@ -69,5 +69,10 @@
   "cloud_api.muse_ok": "✅ {profile} は muse.ai にログイン済みです。",
   "cloud_api.muse_not_signed": "❌ {profile} は muse.ai にログインしていません — プロファイルを開いて muse.ai にログインし、もう一度確認してください。",
   "cloud_api.muse_test_running": "Muse に問い合わせ中…",
-  "cloud_api.muse_test_ok": "✅ Muse が {s} 秒で応答: {reply}"
+  "cloud_api.muse_test_ok": "✅ Muse が {s} 秒で応答: {reply}",
+  "cloud_api.muse_extra": "追加アカウント（並列で描画）",
+  "cloud_api.muse_extra_hint": "それぞれ別の muse.ai アカウントでログインした他のブラウザープロファイルにチェックを入れます。リクエストはすべてのアカウントに振り分けられ、3 アカウントなら 3 枚を同時に描きます。",
+  "cloud_api.muse_lanes": "アカウントごとの同時リクエスト数",
+  "cloud_api.muse_lanes_hint": "安全のため 1 のままにしてください。短いテストでは 2 でも動きましたが、多くのリクエストを同時に送るアカウントは Muse に遅くされたり、フラグを付けられたりする可能性があります。",
+  "cloud_api.muse_saved_pool": "保存しました — Muse は {profile} と追加の {n} アカウントを使います。"
 }

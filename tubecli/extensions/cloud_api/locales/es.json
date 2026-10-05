@@ -54,7 +54,7 @@
   "cloud_api.muse_setup": "⚙ Configurar",
   "cloud_api.muse_profile_tag": "Perfil: {profile}",
   "cloud_api.muse_title": "Sesión de navegador de Muse",
-  "cloud_api.muse_hint": "Muse no tiene clave de API: TubeCLI escribe en muse.ai dentro de un perfil de navegador con la sesión iniciada. Elige ese perfil. Un perfil cerrado se abre en segundo plano en la primera solicitud, y Muse responde una solicitud a la vez.",
+  "cloud_api.muse_hint": "Muse no tiene clave de API: TubeCLI escribe en muse.ai dentro de un perfil de navegador con la sesión iniciada. Elige ese perfil. Un perfil cerrado se abre en segundo plano en la primera solicitud. Cada cuenta responde una solicitud a la vez: añade más cuentas abajo para dibujar varias imágenes a la vez.",
   "cloud_api.muse_profile": "Perfil del navegador",
   "cloud_api.muse_pick": "— elige un perfil —",
   "cloud_api.muse_turns": "Solicitudes por chat lateral",
@@ -69,5 +69,10 @@
   "cloud_api.muse_ok": "✅ {profile} tiene la sesión iniciada en muse.ai.",
   "cloud_api.muse_not_signed": "❌ {profile} no tiene la sesión iniciada en muse.ai: abre el perfil, inicia sesión en muse.ai y vuelve a comprobar.",
   "cloud_api.muse_test_running": "Preguntando a Muse…",
-  "cloud_api.muse_test_ok": "✅ Muse respondió en {s} s: {reply}"
+  "cloud_api.muse_test_ok": "✅ Muse respondió en {s} s: {reply}",
+  "cloud_api.muse_extra": "Más cuentas (dibujar en paralelo)",
+  "cloud_api.muse_extra_hint": "Marca otros perfiles de navegador, cada uno con una cuenta de muse.ai distinta. Las solicitudes se reparten entre todas las cuentas: 3 cuentas dibujan 3 imágenes a la vez.",
+  "cloud_api.muse_lanes": "Solicitudes simultáneas por cuenta",
+  "cloud_api.muse_lanes_hint": "Deja 1 para ir sobre seguro. 2 funcionó en una prueba corta, pero Muse puede ir más lento o marcar una cuenta que envía muchas solicitudes a la vez.",
+  "cloud_api.muse_saved_pool": "Guardado: Muse usa {profile} y {n} cuenta(s) más."
 }

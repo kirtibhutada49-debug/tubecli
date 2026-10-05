@@ -54,7 +54,7 @@
   "cloud_api.muse_setup": "⚙ 设置",
   "cloud_api.muse_profile_tag": "配置文件：{profile}",
   "cloud_api.muse_title": "Muse 浏览器会话",
-  "cloud_api.muse_hint": "Muse 没有 API 密钥：TubeCLI 会在已登录 muse.ai 的浏览器配置文件中向 muse.ai 输入内容。请选择该配置文件。已关闭的配置文件会在首次请求时于后台打开，Muse 一次只处理一个请求。",
+  "cloud_api.muse_hint": "Muse 没有 API 密钥：TubeCLI 会在已登录 muse.ai 的浏览器配置文件中向 muse.ai 输入内容。请选择该配置文件。已关闭的配置文件会在首次请求时于后台打开。每个账号一次只处理一个请求——在下方添加更多账号即可同时绘制多张图片。",
   "cloud_api.muse_profile": "浏览器配置文件",
   "cloud_api.muse_pick": "— 选择配置文件 —",
   "cloud_api.muse_turns": "每个侧边聊天的请求数",
@@ -69,5 +69,10 @@
   "cloud_api.muse_ok": "✅ {profile} 已登录 muse.ai。",
   "cloud_api.muse_not_signed": "❌ {profile} 未登录 muse.ai — 请打开该配置文件，登录 muse.ai 后再检查。",
   "cloud_api.muse_test_running": "正在询问 Muse…",
-  "cloud_api.muse_test_ok": "✅ Muse 在 {s} 秒内回答：{reply}"
+  "cloud_api.muse_test_ok": "✅ Muse 在 {s} 秒内回答：{reply}",
+  "cloud_api.muse_extra": "更多账号（并行绘图）",
+  "cloud_api.muse_extra_hint": "勾选其他浏览器配置文件，每个都登录不同的 muse.ai 账号。请求会分配到所有账号——3 个账号可同时绘制 3 张图片。",
+  "cloud_api.muse_lanes": "每个账号同时请求数",
+  "cloud_api.muse_lanes_hint": "为安全起见请保持 1。简短测试中 2 也能用，但同时发送大量请求的账号可能被 Muse 降速或标记。",
+  "cloud_api.muse_saved_pool": "已保存 — Muse 使用 {profile} 和另外 {n} 个账号。"
 }
