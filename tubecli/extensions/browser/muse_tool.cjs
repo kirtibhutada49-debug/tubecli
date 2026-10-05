@@ -346,21 +346,25 @@ async function ask(ctx, req) {
       await page.keyboard.press('Escape').catch(() => {});
       await ta.click({ force: true, timeout: 10000 });
     }
-    // Mã riêng của lượt này ở cuối tin. 5/10/2026: chat phụ dùng lại mà lịch sử hiện CHẬM (sau khi chụp `seen`) thì
-    // «tin người dùng cuối chưa thấy» là tin của LƯỢT TRƯỚC ⇒ trả ảnh của lượt trước sau ~10 s (vẽ thật mất 27–60 s):
-    // #275 có 11 tấm trùng, và tranh vẽ thật cho tin mình bị lượt SAU vớ nhầm. Nhận tin của mình theo mã, không theo
-    // thứ tự. textContent (không phải innerText) để tin dài bị thu gọn vẫn khớp.
-    const mark = 'r' + Math.random().toString(36).slice(2, 8);
-    await ta.fill(`${prompt}\n\n[message id ${mark} - for tracking only, not part of the request; never draw or repeat it]`);
+    // Nhận tin CỦA MÌNH theo đuôi nội dung của chính prompt. 5/10/2026: chat phụ dùng lại mà lịch sử hiện CHẬM (sau khi
+    // chụp `seen`) thì «tin người dùng cuối chưa thấy» là tin của LƯỢT TRƯỚC ⇒ trả ảnh của lượt trước sau ~10 s (vẽ
+    // thật mất 27–60 s): #275 có 11 tấm trùng. Bản đầu (b6667c2) gắn mã «[message id …]» vào cuối tin — Muse hiểu sai cả
+    // tin (#276: vẽ lời dặn style thành chữ «white chalk», nhãn tiếng Anh thay nhãn Đức) ⇒ KHÔNG chèn gì vào tin nữa.
+    // So chữ-và-số (bỏ dấu câu, khoảng trắng): Muse hiển thị tin có thể đổi ngoặc/xuống dòng. textContent để tin dài
+    // bị thu gọn vẫn khớp.
+    const alnum = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    const mark = alnum(prompt).slice(-48);
+    await ta.fill(prompt);
     await sleep(200);
     await ta.press('Enter');
 
-    // Đã gửi = có tin người dùng MỚI mang mã của mình. Enter không ăn (ô soạn chưa sẵn) thì bấm nút gửi.
+    // Đã gửi = có tin người dùng MỚI mang đuôi prompt của mình. Enter không ăn (ô soạn chưa sẵn) thì bấm nút gửi.
     let myId = '';
     const findMine = (needMark) => page.locator(`${SEL.message}[data-message-role="user"]`).evaluateAll(
       (els, { seen, mark, needMark }) => {
+        const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
         const fresh = els.filter((x) => !seen.includes(x.getAttribute('data-message-id'))).reverse();
-        const e = needMark ? fresh.find((x) => (x.textContent || '').includes(mark)) : fresh[0];
+        const e = needMark && mark ? fresh.find((x) => norm(x.textContent).includes(mark)) : fresh[0];
         return e ? e.getAttribute('data-message-id') : '';
       }, { seen, mark, needMark });
     for (let i = 0; i < 40 && !myId; i++) {
