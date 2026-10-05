@@ -308,7 +308,7 @@ async function ask(ctx, req) {
     }
     // Id các ô ĐÃ CÓ trước khi gửi. Tin của mình = tin người dùng CUỐI không nằm trong danh sách này — KHÔNG
     // bám theo id: Muse vẽ tin vừa gửi bằng id tạm rồi thay bằng id của máy chủ (đo 2/10/2026).
-    const seen = await page.locator(SEL.message).evaluateAll(
+    let seen = await page.locator(SEL.message).evaluateAll(
       (els) => els.map((e) => e.getAttribute('data-message-id')));
 
     if (files.length) {
@@ -346,24 +346,41 @@ async function ask(ctx, req) {
       await page.keyboard.press('Escape').catch(() => {});
       await ta.click({ force: true, timeout: 10000 });
     }
-    await ta.fill(prompt);
+    // Mã riêng của lượt này ở cuối tin. 5/10/2026: chat phụ dùng lại mà lịch sử hiện CHẬM (sau khi chụp `seen`) thì
+    // «tin người dùng cuối chưa thấy» là tin của LƯỢT TRƯỚC ⇒ trả ảnh của lượt trước sau ~10 s (vẽ thật mất 27–60 s):
+    // #275 có 11 tấm trùng, và tranh vẽ thật cho tin mình bị lượt SAU vớ nhầm. Nhận tin của mình theo mã, không theo
+    // thứ tự. textContent (không phải innerText) để tin dài bị thu gọn vẫn khớp.
+    const mark = 'r' + Math.random().toString(36).slice(2, 8);
+    await ta.fill(`${prompt}\n\n[message id ${mark} - for tracking only, not part of the request; never draw or repeat it]`);
     await sleep(200);
     await ta.press('Enter');
 
-    // Đã gửi = có tin người dùng MỚI. Enter không ăn (ô soạn chưa sẵn) thì bấm nút gửi.
+    // Đã gửi = có tin người dùng MỚI mang mã của mình. Enter không ăn (ô soạn chưa sẵn) thì bấm nút gửi.
     let myId = '';
-    const findMine = () => page.locator(`${SEL.message}[data-message-role="user"]`).evaluateAll(
-      (els, seen) => { const e = els.reverse().find((x) => !seen.includes(x.getAttribute('data-message-id'))); return e ? e.getAttribute('data-message-id') : ''; },
-      seen);
+    const findMine = (needMark) => page.locator(`${SEL.message}[data-message-role="user"]`).evaluateAll(
+      (els, { seen, mark, needMark }) => {
+        const fresh = els.filter((x) => !seen.includes(x.getAttribute('data-message-id'))).reverse();
+        const e = needMark ? fresh.find((x) => (x.textContent || '').includes(mark)) : fresh[0];
+        return e ? e.getAttribute('data-message-id') : '';
+      }, { seen, mark, needMark });
     for (let i = 0; i < 40 && !myId; i++) {
       await sleep(250);
-      myId = await findMine();
+      myId = await findMine(true);
       if (!myId && i === 16) {
         const left = await ta.inputValue().catch(() => '');
         if (left.trim()) await page.locator(`${SEL.actionSlot} button`).last().click({ timeout: 3000 }).catch(() => {});
       }
     }
+    if (!myId) {
+      // Muse hiện tin mà không có mã (đổi cách hiển thị?) — lùi về cách cũ, có ghi lại để còn biết.
+      myId = await findMine(false);
+      if (myId && process.env.MUSE_DEBUG) console.error(`[muse] own message found without its mark ${mark}`);
+    }
     if (!myId) return { ok: false, kind: 'error', error: 'Muse did not accept the message (nothing was sent).', url: page.url() };
+    // Từ đây «tin của mình» = tin người dùng duy nhất KHÔNG nằm trong `seen`: mọi tin người dùng khác đang có (kể cả
+    // lịch sử hiện muộn) vào `seen`. Muse đổi id tạm của tin mình sang id máy chủ thì tin ấy vẫn ngoài `seen`.
+    seen = await page.locator(`${SEL.message}[data-message-role="user"]`).evaluateAll(
+      (els, myId) => els.map((e) => e.getAttribute('data-message-id')).filter((id) => id !== myId), myId);
     const sentMs = Date.now() - t0;
 
     const deadline = t0 + timeout;
