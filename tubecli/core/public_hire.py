@@ -44,7 +44,8 @@ REPORT_MIN_GAP = 20            # đừng dội cloud: chỉ báo khi ĐỔI bư�
 HEARTBEAT_SEC = 300
 MAX_BRIEF = 4000
 # Việc «video quảng cáo từ ảnh» (pod.video): ảnh khách gửi đi KÈM lệnh nhận việc (base64, cloud không cất).
-POD_MAX_MODELS, POD_MAX_PRODUCTS = 3, 2
+# Sản phẩm 2 → 4 (5/10/2026): nhiều mẫu (màu) cùng một món — Pod 1.3.28 cho mỗi clip mặc một mẫu, mờ chuyển giữa clip
+POD_MAX_MODELS, POD_MAX_PRODUCTS = 3, 4
 POD_MAX_LOCATIONS = 1                   # ảnh BỐI CẢNH (5/10/2026): đường phố, studio… — Pod 1.3.26 khoá mọi cảnh vào đó
 POD_IMG_MAX = 3 * 1024 * 1024           # mỗi ảnh sau giải mã — trình duyệt đã thu về ≤ 1600 px
 _POD_STEP_PCT = {"intake": 5, "character": 15, "shots": 25, "board": 40, "clips": 60, "render": 90}

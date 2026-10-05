@@ -157,7 +157,7 @@ check("không phải ảnh → bad_images",
 ph.POD_IMG_MAX = 200
 check("ảnh quá cỡ → image_too_large", rc({**base, "job": "pod555555557"}) == "image_too_large")
 ph.POD_IMG_MAX = 3 * 1024 * 1024
-check("quá 2 ảnh sản phẩm → bad_images", rc({**base, "job": "pod555555558", "products": [{"b64": jpg_b64()}] * 3}) == "bad_images")
+check("quá 4 ảnh sản phẩm → bad_images", rc({**base, "job": "pod555555558", "products": [{"b64": jpg_b64()}] * 5}) == "bad_images")
 check("quá 1 ảnh bối cảnh → bad_images", rc({**base, "job": "pod555555559", "locations": [{"b64": jpg_b64()}] * 2}) == "bad_images")
 check("ảnh bối cảnh: lưu kho ảnh Pod, đuôi _l1",
       rc({**base, "job": "podg00000000", "locations": [{"b64": jpg_b64(fmt="PNG")}]}) == {"ok": True, "job": "podg00000000"}
