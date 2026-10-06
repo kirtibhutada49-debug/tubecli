@@ -2208,6 +2208,7 @@ export class BrowserManager {
                 // Dynamic timezone, language, and Client Hints override right before launch
                 try {
                     const ipDetails = await this.resolveIPDetails(proxy);
+                    this.lastIpDetails = ipDetails || null;   // preview_server chọn trang đầu / máy tìm kiếm theo countryCode
                     if (ipDetails) {
                         console.log(`[ShardX] Injecting resolved timezone: ${ipDetails.timezone}`);
                         shardxData.timezone = ipDetails.timezone;

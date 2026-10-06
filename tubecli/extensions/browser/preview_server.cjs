@@ -89,6 +89,15 @@ function isClipboardShortcut(key) {
     return mods.has('shift') && ['insert', 'delete'].includes(base);
 }
 
+// Trang mở đầu + máy tìm kiếm cho browser theo QUỐC GIA IP THẬT mà browser đi ra (browser_manager.resolveIPDetails,
+// tính cả proxy của hồ sơ — hồ sơ ở Trung Quốc mà đi proxy nước ngoài vẫn vào Google). Trung Quốc đại lục chặn
+// Google: máy Aliyun Bắc Kinh 6/10/2026 goto google.com hết 30 s, cloud báo «No frames received for too long».
+// Gửi lên Flow trong browser_ready (home, search) để nút tab mới + tìm kiếm ở ô địa chỉ dùng đúng nơi.
+const GOOGLE_HOME = { home: 'https://www.google.com', search: 'https://www.google.com/search?q=' };
+const NO_GOOGLE_HOME = { CN: { home: 'https://cn.bing.com', search: 'https://cn.bing.com/search?q=' } };
+let browserHome = GOOGLE_HOME;
+function homeForCountry(cc) { return NO_GOOGLE_HOME[String(cc || '').toUpperCase()] || GOOGLE_HOME; }
+
 function log(msg) {
     console.log(JSON.stringify({ type: 'log', message: msg, time: new Date().toISOString() }));
     if (typeof broadcast === 'function') {
@@ -605,7 +614,9 @@ process.on('uncaughtException', (err) => {
                 }
                 const np = await context.newPage();
                 attachPageListeners(np);
-                if (msg.url) { try { await np.goto(msg.url, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) {} }
+                // Không kèm URL → trang đầu theo quốc gia (Flow cũ luôn gửi google.com; Flow mới gửi rỗng khi chưa biết)
+                const ntUrl = msg.url || browserHome.home;
+                try { await np.goto(ntUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) {}
                 await switchToPage(np);
             }
             else if (msg.type === 'switch_tab') {
@@ -1024,7 +1035,7 @@ process.on('uncaughtException', (err) => {
         if (isBrowserReady && page) {
             try {
                 ws.send(JSON.stringify({ type: 'url_changed', url: page.url() }));
-                ws.send(JSON.stringify({ type: 'browser_ready', url: page.url() }));
+                ws.send(JSON.stringify({ type: 'browser_ready', url: page.url(), home: browserHome.home, search: browserHome.search }));
             } catch (e) {}
             triggerImmediateFrame().catch(()=>{});
         }
@@ -1335,6 +1346,8 @@ process.on('uncaughtException', (err) => {
         }
     }
 
+    browserHome = homeForCountry(browserManager.lastIpDetails && browserManager.lastIpDetails.countryCode);
+    let pendingHome = '';
     if (attachMode) {
         // Khong dieu huong gi het. startUrl cua yeu cau xem ghep luon la about:blank,
         // nhung viet ro nhanh nay de mot lan sua sau khong lo goto() vao trang agent.
@@ -1361,10 +1374,12 @@ process.on('uncaughtException', (err) => {
         if (real.length) {
             await switchToPage(real[real.length - 1]);
         } else {
-            // Browser MỚI (chưa có tab thật nào để khôi phục) → mặc định google.com,
-            // thay vì bỏ người dùng ở trang about:blank trắng trơn.
-            try { await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded', timeout: 30000 }); }
-            catch (e) { log(`Warning: default nav to google failed: ${e.message}`); }
+            // Browser MỚI (chưa có tab thật nào để khôi phục) → trang đầu theo quốc gia (Google, hoặc Bing ở Trung
+            // Quốc), thay vì bỏ người dùng ở trang about:blank trắng trơn. KHÔNG chờ: trước đây await tới 30 s nên
+            // phiên chưa «sẵn sàng», không phát hình, và Flow báo «No frames received» khi trang chậm hay bị chặn.
+            // Mở SAU khi phiên đã sẵn sàng và phát khung đầu (xem pendingHome dưới): goto chạy song song với bước
+            // tiêm bộ chọn phần tử làm «Execution context was destroyed» và giết cả phiên (máy Bắc Kinh 6/10/2026).
+            pendingHome = browserHome.home;
         }
     }
     log(`Browser ready at: ${await page.url()}`);
@@ -1402,9 +1417,11 @@ process.on('uncaughtException', (err) => {
     `;
     // Trang trong che do xem ghep thuoc ve agent va co the dang dieu huong: tiem
     // hong thi chi mat bo chon phan tu, KHONG duoc giet ca khung xem.
+    // Trang dang dieu huong (chuyen trang la chuyen thuong) cung chi mat bo chon phan tu — KHONG giet ca phien.
+    // Truoc day ngoai che do xem ghep thi nem loi o day: goto Google het han o Trung Quoc ma trang van dang tai
+    // → «Execution context was destroyed» → FATAL launch_failed, Flow bao «No frames received» (6/10/2026).
     await page.evaluate(pickerScript).catch((e) => {
-        if (!attachMode) throw e;
-        log('Khong tiem duoc picker vao trang cua agent: ' + e.message);
+        log((attachMode ? 'Khong tiem duoc picker vao trang cua agent: ' : 'Khong tiem duoc picker (trang dang chuyen): ') + e.message);
     });
 
     // Listeners điều hướng đã gắn qua attachPageListeners; phát tab ban đầu
@@ -1416,8 +1433,13 @@ process.on('uncaughtException', (err) => {
     
     // Broadcast initial state to any already-connected clients
     broadcast({ type: 'url_changed', url: page.url() });
-    broadcast({ type: 'browser_ready', url: page.url() });
+    broadcast({ type: 'browser_ready', url: page.url(), home: browserHome.home, search: browserHome.search });
     triggerImmediateFrame().catch(()=>{});
+    if (pendingHome) {
+        const home = pendingHome;
+        page.goto(home, { waitUntil: 'domcontentloaded', timeout: 30000 })
+            .catch((e) => log(`Warning: default nav to ${home} failed: ${e.message}`));
+    }
 
     // Đóng browser đã được onBrowserDeath xử lý (đăng ký ngay sau launch, ở trên): chưa
     // everReady → báo lý do phân loại; đã everReady → log + đóng server + thoát 0. KHÔNG
