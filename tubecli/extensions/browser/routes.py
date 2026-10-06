@@ -3114,6 +3114,19 @@ async def stop_preview(request: Request):
     body = await request.json()
     session_id = body.get("session_id", "")
     info = _preview_processes.pop(session_id, None)
+    if info is None:
+        # Mã phiên thật là preview_<thời điểm>, nhưng Flow trước 6/10/2026 gửi preview_<cổng> (cả ■, ✕, đổi
+        # hồ sơ) → luôn not_found, phiên sống tiếp. Không khớp mã thì tìm theo cổng: trường `port`, hoặc
+        # số trong preview_<cổng> (cổng ≤ 5 chữ số, mốc thời gian 10 chữ số nên không lẫn).
+        port = body.get("port")
+        if port in (None, ""):
+            m = re.fullmatch(r"preview_(\d{2,5})", str(session_id or ""))
+            port = m.group(1) if m else None
+        if port not in (None, ""):
+            for sid, inf in list(_preview_processes.items()):
+                if str(inf.get("port")) == str(port):
+                    info = _preview_processes.pop(sid, None)
+                    break
     if info:
         try:
             # Kill process tree on Windows/Linux
