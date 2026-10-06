@@ -9,6 +9,8 @@ Kiểm (KHÔNG chạm trình duyệt / Muse thật: ensure_browser, run_tool, _c
   E. tài khoản chưa đăng nhập → thử lại ở tài khoản khác, tài khoản hỏng bị bỏ qua một lúc
   F. lanes=2: một tài khoản chạy 2 lượt cùng lúc, mỗi lượt một chat phụ
   G. status() có một dòng cho mỗi tài khoản; route PUT /settings nhận extra_profiles + lanes
+  H. Muse gửi lại ảnh cũ của chat → vẽ lại trong chat mới
+  I. lượt chữ treo hết hạn → hỏi lại MỘT lần trong chat mới (ảnh / chuỗi clip thì không)
 
 Run:  python tests/muse_pool_test.py
 """
@@ -286,6 +288,48 @@ try:
 except M.MuseError as e:
     ok("earlier image" in str(e) and asked == ["T3", "new"], "trùng cả hai lần → MuseError, không trả tranh nhịp khác",
        (str(e), asked))
+
+# ── I ─────────────────────────────────────────────────────────────────────────
+print("I. lượt chữ treo hết hạn")
+M.set_settings(extra_profiles=["muse2", "muse3"], lanes=1)
+reset()
+hung = []
+
+
+def first_hangs(port, action, req=None, timeout=60):
+    hung.append((BY_PORT[port], req["thread"]))
+    if len(hung) == 1:
+        return {"ok": False, "kind": "timeout", "error": "Muse did not finish within 300 s.", "thread_id": "T-hang"}
+    return {"ok": True, "text": "scenes", "images": [], "thread_id": "T-" + BY_PORT[port]}
+
+
+M.run_tool = first_hangs
+M._save_slot("chayagent", {"profile": "chayagent", "thread": "T-hang", "turns": 3})
+M._LAST_USED.update({"chayagent": 1.0, "muse2": 2.0, "muse3": 3.0})
+r = M.ask("describe scenes 1-12")
+ok(r["text"] == "scenes" and len(hung) == 2 and hung[1][1] == "new" and hung[1][0] != "chayagent",
+   "chữ treo → hỏi lại MỘT lần trong chat mới ở tài khoản khác", hung)
+ok(not M._DOWN and not M._BUSY, "treo không làm tài khoản bị bỏ qua, chỗ ngồi đã nhả", (M._DOWN, M._BUSY))
+M.run_tool = lambda port, action, req=None, timeout=60: (hung.append(1) or
+                                                        {"ok": False, "kind": "timeout", "error": "slow"})
+reset()
+hung.clear()
+try:
+    M.ask("q")
+    ok(False, "treo cả hai lần → MuseError")
+except M.MuseError as e:
+    ok(e.kind == "timeout" and len(hung) == 2, "treo cả hai lần → MuseError(timeout), chỉ thử lại một lần", hung)
+reset()
+hung.clear()
+try:
+    M.ask("draw", want_images=True)
+except M.MuseError:
+    pass
+try:
+    M.ask("clip", thread_id="CH-x")
+except M.MuseError:
+    pass
+ok(len(hung) == 2, "ảnh / chat riêng (chuỗi clip) treo → KHÔNG tự hỏi lại", hung)
 
 print()
 print(f"{PASS} passed, {FAIL} failed")

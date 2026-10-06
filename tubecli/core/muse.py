@@ -588,6 +588,11 @@ def ask(prompt: str, *, want_images: bool = False, files: Optional[List[str]] = 
             return ask(prompt, want_images=want_images, files=files, image_dir=image_dir, max_images=max_images,
                        timeout=timeout, fresh=fresh, launch=launch, want_videos=want_videos, video_dir=video_dir,
                        max_videos=max_videos, thread_id=thread_id, _failover=False)
+    elif failed.kind == "timeout" and _failover and not own and not want_images and not want_videos:
+        # Lượt CHỮ treo hết hạn mà không ra chữ nào (6/10/2026: task #277 hỏng ở bước kịch bản sau 300 s, Muse vẫn
+        # khoẻ) — thử lại MỘT lần trong chat MỚI; xoay vòng nên thường rơi vào tài khoản khác. Không coi là hỏng.
+        logger.warning("muse: no answer from %s within %s s — asking once more in a new chat", prof, timeout)
+        return ask(prompt, files=files, timeout=timeout, fresh=True, launch=launch, _failover=False)
     raise failed
 
 
