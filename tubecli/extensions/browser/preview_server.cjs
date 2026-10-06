@@ -93,10 +93,14 @@ function isClipboardShortcut(key) {
 // tính cả proxy của hồ sơ — hồ sơ ở Trung Quốc mà đi proxy nước ngoài vẫn vào Google). Trung Quốc đại lục chặn
 // Google: máy Aliyun Bắc Kinh 6/10/2026 goto google.com hết 30 s, cloud báo «No frames received for too long».
 // Gửi lên Flow trong browser_ready (home, search) để nút tab mới + tìm kiếm ở ô địa chỉ dùng đúng nơi.
-const GOOGLE_HOME = { home: 'https://www.google.com', search: 'https://www.google.com/search?q=' };
-const NO_GOOGLE_HOME = { CN: { home: 'https://cn.bing.com', search: 'https://cn.bing.com/search?q=' } };
-let browserHome = GOOGLE_HOME;
-function homeForCountry(cc) { return NO_GOOGLE_HOME[String(cc || '').toUpperCase()] || GOOGLE_HOME; }
+// User 6/10/2026: trang đầu (browser mới, tab mới) + máy tìm kiếm mặc định là Bing cho MỌI máy. Dùng www.bing.com
+// chứ không cn.bing.com: đo thật — từ Trung Quốc www.bing.com 302 sang cn.bing.com (0,33 s, tìm kiếm cũng thế),
+// từ Việt Nam giữ www.bing.com; còn cn.bing.com mở từ ngoài Trung Quốc lại bị đẩy sang bản tiếng Trung (?mkt=zh-CN).
+// Bảng theo quốc gia giữ lại để chỗ nào cần khác thì thêm một dòng.
+const DEFAULT_HOME = { home: 'https://www.bing.com', search: 'https://www.bing.com/search?q=' };
+const HOME_BY_COUNTRY = {};
+let browserHome = DEFAULT_HOME;
+function homeForCountry(cc) { return HOME_BY_COUNTRY[String(cc || '').toUpperCase()] || DEFAULT_HOME; }
 
 function log(msg) {
     console.log(JSON.stringify({ type: 'log', message: msg, time: new Date().toISOString() }));
@@ -1371,11 +1375,17 @@ process.on('uncaughtException', (err) => {
     } else {
         // Không yêu cầu URL nào → DÙNG LẠI tab CUỐI của phiên trước, không mở gì thêm.
         const real = context.pages().filter((p) => p.url() !== 'about:blank');
-        if (real.length) {
+        // Tab khôi phục mà tải hỏng (chrome-error://, vd. tab Google cũ trên máy Trung Quốc) không phải trang
+        // người dùng muốn nhìn: ưu tiên tab tải được; tab nào cũng hỏng thì đưa tab đó về trang đầu.
+        const loaded = real.filter((p) => !p.url().startsWith('chrome-error://'));
+        if (loaded.length) {
+            await switchToPage(loaded[loaded.length - 1]);
+        } else if (real.length) {
             await switchToPage(real[real.length - 1]);
+            pendingHome = browserHome.home;
         } else {
-            // Browser MỚI (chưa có tab thật nào để khôi phục) → trang đầu theo quốc gia (Google, hoặc Bing ở Trung
-            // Quốc), thay vì bỏ người dùng ở trang about:blank trắng trơn. KHÔNG chờ: trước đây await tới 30 s nên
+            // Browser MỚI (chưa có tab thật nào để khôi phục) → trang đầu (Bing — Google bị chặn ở Trung Quốc),
+            // thay vì bỏ người dùng ở trang about:blank trắng trơn. KHÔNG chờ: trước đây await tới 30 s nên
             // phiên chưa «sẵn sàng», không phát hình, và Flow báo «No frames received» khi trang chậm hay bị chặn.
             // Mở SAU khi phiên đã sẵn sàng và phát khung đầu (xem pendingHome dưới): goto chạy song song với bước
             // tiêm bộ chọn phần tử làm «Execution context was destroyed» và giết cả phiên (máy Bắc Kinh 6/10/2026).

@@ -24,10 +24,26 @@ function requirePlugin() {
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
+import net from 'net';
 import axios from 'axios';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { createRequire } from 'module';
+
+// Tên miền Google cho --host-resolver-rules khi máy ở Trung Quốc không tới được Google (xem launch ShardX).
+export const GOOGLE_HOSTS = ['google.com', '*.google.com', 'google.com.hk', '*.google.com.hk'];
+
+// Mở được TCP tới host:port trong timeoutMs không. Lỗi/hết hạn/IP giả (2001::1 → không có đường) đều = false.
+export function probeTcp(host, port, timeoutMs) {
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = (ok) => { if (!done) { done = true; try { sock.destroy(); } catch (e) {} resolve(ok); } };
+        const sock = net.connect({ host, port });
+        sock.setTimeout(timeoutMs, () => finish(false));
+        sock.once('connect', () => finish(true));
+        sock.once('error', () => finish(false));
+    });
+}
 
 // ── Dò engine ShardX ───────────────────────────────────────────────────────
 // Tách khỏi thân launch() vì BA chỗ cần cùng một câu trả lời: hồ sơ ghim ShardX,
@@ -2355,6 +2371,20 @@ export class BrowserManager {
             }
             console.log(`[ShardX] Proxy: ${proxyOption.server}`
                 + (px.hasCredentials ? ' (with credentials)' : ''));
+        }
+
+        // Trung Quốc chặn Google bằng DNS giả (www.google.com → 2001::1) + nuốt gói: Chromium chờ hết hạn TCP
+        // của hệ điều hành (~2 phút). Tab Google của phiên trước được khôi phục thì launchPersistentContext
+        // treo theo tới lúc đó — máy Aliyun Bắc Kinh 6/10/2026: Spawning → launched mất 136 s MỖI lần mở.
+        // Dò thật (không đoán theo quốc gia: máy có VPN/TUN theo luật vẫn vào được Google) rồi mới cho
+        // Chromium báo lỗi tên miền NGAY cho Google. Có proxy hay phiên cô lập thì bỏ qua (DNS đi qua proxy).
+        if (!proxy && !isolate && this.lastIpDetails && String(this.lastIpDetails.countryCode).toUpperCase() === 'CN') {
+            const reachable = await probeTcp('www.google.com', 443, 3000);
+            this.googleBlocked = !reachable;
+            if (!reachable) {
+                launchArgs.push('--host-resolver-rules=' + GOOGLE_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(', '));
+                console.log('[ShardX] Google không tới được từ máy này (Trung Quốc) → báo lỗi ngay thay vì treo ~2 phút');
+            }
         }
 
         // Cô lập mạng cho phiên người lạ điều khiển: Chromium CHỈ nói chuyện với net_guard
