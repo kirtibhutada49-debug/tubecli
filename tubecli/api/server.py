@@ -2688,7 +2688,8 @@ async def check_for_updates(force: bool = False):
         # phút) nên bình thường không tới ngưỡng.
         api_url = ("https://api.github.com/repos/tubecreate/tubecli/contents/"
                    "tubecli/__init__.py?ref=main")
-        raw_url = "https://raw.githubusercontent.com/tubecreate/tubecli/main/tubecli/__init__.py"
+        from tubecli.core.net_mirror import mirror_url   # máy ở Trung Quốc: raw bị chặn, API vẫn vào được
+        raw_url = mirror_url("https://raw.githubusercontent.com/tubecreate/tubecli/main/tubecli/__init__.py")
         # Our own 30-minute cache is not the only one in the way: raw.github
         # serves through a CDN with its own max-age, so a release published a
         # minute ago can still read as "up to date". On an explicit check, ask

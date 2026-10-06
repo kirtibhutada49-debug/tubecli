@@ -69,9 +69,17 @@ HOME = _home_dir()
 CONF = os.path.join(HOME, "connect.json")
 LOG = os.path.join(HOME, "connect.log")
 CLOUDFLARED = os.path.join(HOME, "cloudflared.exe" if IS_WIN else "cloudflared")
-RAW = "https://raw.githubusercontent.com/tubecreate/tubecli/main"
+# Mạng chặn raw.githubusercontent.com (Trung Quốc đại lục): install-cn.sh / lệnh ghép nối bản CN truyền
+# TUBECLI_GH_PROXY (vd. https://gh-proxy.com/) — mọi URL GitHub đi qua tiền tố đó, và máy Linux/macOS cài
+# bằng install-cn.sh (mirror Node/npm/pip + clone qua đường đi được) thay vì install.sh.
+GH_PROXY = (os.environ.get("TUBECLI_GH_PROXY") or "").strip()
+if GH_PROXY and not GH_PROXY.startswith(("http://", "https://")):
+    GH_PROXY = ""
+if GH_PROXY and not GH_PROXY.endswith("/"):
+    GH_PROXY += "/"
+RAW = f"{GH_PROXY}https://raw.githubusercontent.com/tubecreate/tubecli/main"
 INSTALL_PS1 = f"{RAW}/install.ps1"
-INSTALL_SH = f"{RAW}/install.sh"
+INSTALL_SH = f"{RAW}/install-cn.sh" if GH_PROXY else f"{RAW}/install.sh"
 
 
 def cpu_arch() -> str:
@@ -92,7 +100,7 @@ def cloudflared_url() -> str:
     Ba hệ ba kiểu đóng gói, và đây là chỗ dễ sai âm thầm: macOS phát hành .tgz chứ
     không phải binary trần, nên tải về rồi chạy thẳng là "Exec format error".
     """
-    base = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-"
+    base = f"{GH_PROXY}https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-"
     a = cpu_arch()
     if IS_WIN:
         return f"{base}windows-{'386' if a == '386' else 'amd64'}.exe"

@@ -576,6 +576,19 @@ elif grep -q "externally-managed-environment" "$PIP_LOG"; then
     echo -e "${YELLOW}[!] This Python is managed by your OS and will not accept packages directly.${NC}"
     echo -e "${YELLOW}[*] Installing into a private virtualenv instead...${NC}"
     if ! "${PY:-python3}" -m venv "$TARGET_DIR/.venv"; then
+        # Ubuntu 24.04 tối giản (ECS Aliyun, 6/10/2026) có pip mà THIẾU ensurepip → venv chết ngay, và
+        # trước đây cài dừng ở đây bắt người dùng tự apt. Tự cài gói venv (cả bản theo phiên bản
+        # python3.X-venv — gói meta python3-venv có khi trỏ nhầm bản) rồi thử lại một lần.
+        rm -rf "$TARGET_DIR/.venv"
+        PYVER="$("${PY:-python3}" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
+        echo -e "${YELLOW}[*] venv is missing its package — installing it...${NC}"
+        if command_exists apt-get; then
+            install_system_packages python3-venv ${PYVER:+"python${PYVER}-venv"} || true
+        elif command_exists zypper; then
+            install_system_packages python3-virtualenv || true
+        fi
+    fi
+    if [ ! -x "$TARGET_DIR/.venv/bin/python" ] && ! "${PY:-python3}" -m venv "$TARGET_DIR/.venv"; then
         echo -e "${RED}[!] Could not create a virtualenv.${NC}"
         echo -e "${YELLOW}    Install the venv package first, then re-run this script:${NC}"
         echo -e "      sudo apt install python3-venv     ${YELLOW}# Debian/Ubuntu${NC}"

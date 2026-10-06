@@ -508,7 +508,8 @@ def fetch_manifest(timeout: float = 8.0, force: bool = False, offline: bool = Fa
     data = {}
     try:
         import requests
-        r = requests.get(MANIFEST_URL, timeout=timeout)
+        from tubecli.core.net_mirror import mirror_url   # raw.githubusercontent bị chặn ở Trung Quốc
+        r = requests.get(mirror_url(MANIFEST_URL), timeout=timeout)
         if r.status_code == 200:
             parsed = r.json()
             if isinstance(parsed, dict):
