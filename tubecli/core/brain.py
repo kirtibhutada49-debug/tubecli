@@ -801,6 +801,16 @@ class AgentBrain:
                     )},
                     {"role": "user", "content": message},
                 ]
+                importer_policy = wf_data.get("_tubecli_importer") or {}
+                if importer_policy.get("free_only"):
+                    import asyncio
+                    from tubecli.core.skill_importer import call_imported_skill_free_model
+                    try:
+                        return await asyncio.to_thread(
+                            call_imported_skill_free_model, agent, sop_messages
+                        )
+                    except Exception as e:
+                        return f"❌ Free-only imported skill inference refused or failed: {e}"
                 return AgentBrain._call_llm(agent, sop_messages)
             return f"❌ Skill '{skill.get('name')}' is a markdown SOP but has no content."
 
@@ -1024,6 +1034,10 @@ Rules:
                   else NodePolicy.user("brain.run_workflow_linear"))
         
         wf_data = skill.get("workflow_data", {})
+        is_google_search = (
+            str(wf_data.get("name") or "").strip().casefold() == "google search"
+            or "google search" in str(skill.get("name") or "").casefold()
+        )
         nodes = wf_data.get("nodes", [])
         connections = wf_data.get("connections", [])
         
@@ -1065,18 +1079,50 @@ Rules:
             
             try:
                 node = create_node_from_dict(n, policy=policy)
-                # Per-node timeout: 30s for AI nodes, 15s for search, 10s for others
+                # Deep research needs longer than the ordinary search-node budget.
                 if node_type in ("model_agent", "ai_node"):
                     node_timeout = 45
                 elif node_type == "web_search":
                     node_timeout = 20
+                elif node_type == "searchclaw_research":
+                    node_timeout = 630
                 else:
                     node_timeout = 10
                 
-                result = await asyncio.wait_for(
-                    node.execute(node_inputs),
-                    timeout=node_timeout
-                )
+                node_config = n.get("config") or {}
+                if node_type == "model_agent" and node_config.get("use_parent_agent_model"):
+                    prompt = node_inputs.get("prompt", "")
+                    context_text = node_inputs.get("context", "")
+                    full_prompt = f"{context_text}\n\n{prompt}" if context_text else prompt
+                    messages = []
+                    if node_config.get("system_prompt"):
+                        messages.append({
+                            "role": "system",
+                            "content": node_config["system_prompt"],
+                        })
+                    history = node_inputs.get("history", [])
+                    if isinstance(history, list):
+                        messages.extend(history)
+                    messages.append({"role": "user", "content": full_prompt})
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            AgentBrain._call_llm,
+                            agent,
+                            messages,
+                            float(node_config.get("temperature", 0.7)),
+                            int(node_config.get("max_tokens", 2048)),
+                        ),
+                        timeout=node_timeout,
+                    )
+                    result = {"response": response}
+                else:
+                    result = await asyncio.wait_for(
+                        node.execute(node_inputs),
+                        timeout=node_timeout
+                    )
+                if (is_google_search and node_type == "web_search"
+                        and not result.get("structured_results")):
+                    return "LIVE SEARCH FAILED"
                 context[node_id] = result
                 last_result = result
                 elapsed = time.time() - start_t
@@ -1085,14 +1131,16 @@ Rules:
                 # Capture AI response for direct return
                 if node_type in ("model_agent", "ai_node") and isinstance(result, dict):
                     ai_text = result.get("response", "")
-                    if ai_text and len(ai_text) > 20:
+                    if ai_text and (len(ai_text) > 20 or is_google_search):
                         ai_response_text = ai_text
                         
             except asyncio.TimeoutError:
                 elapsed = time.time() - start_t
                 print(f"  [Linear] ⏰ {node_id} timed out after {elapsed:.1f}s")
-                # For search nodes, continue with empty results
+                # Google Search must not turn a live-search failure into an AI guess.
                 if node_type == "web_search":
+                    if is_google_search:
+                        return "LIVE SEARCH FAILED"
                     context[node_id] = {"results": f"Tìm kiếm quá lâu cho: {message}", "status": "timeout"}
                     continue
                 raise Exception(f"Node {node_id} timed out after {node_timeout}s")
@@ -1193,12 +1241,18 @@ Rules:
         if max_tokens:
             with AgentBrain.output_budget(max_tokens):
                 return AgentBrain._call_llm(agent, messages, temperature)
-        # Same chain as the browser: the agent's own pick, then the default
-        # browser AI, then the user's default AI. It ended in "qwen:latest",
-        # so an agent with no model of its own talked to an Ollama that is
-        # not running instead of the AI the user had already configured.
-        from tubecli.config import resolve_browser_ai_model
-        model = agent.get("model") or resolve_browser_ai_model(agent)
+        # Keep explicit agent and user defaults; route only an unconfigured
+        # default (including the legacy Ollama birth-default) through 9Router.
+        from tubecli.config import resolve_browser_ai
+        resolved = resolve_browser_ai(agent)
+        agent_model = str(agent.get("model") or "").strip()
+        agent_provider = str(agent.get("provider") or "").strip()
+        model = agent_model or resolved["model"]
+        if not agent_model and not agent_provider:
+            router_model = pick_9router_model()
+            if router_model:
+                model = router_model
+                agent = {**agent, "provider": "9router"}
         
         # Load global keys if missing in agent dict
         cloud_keys = dict(agent.get("cloud_api_keys", {}) or {})
@@ -1219,6 +1273,7 @@ Rules:
         # that are indistinguishable from OpenRouter ids, so a model picked from
         # the 9router group would otherwise be sent to OpenRouter and rejected.
         explicit_provider = (agent.get("provider") or "").strip().lower()
+        free_only = bool(agent.get("_tubecli_free_only"))
         if explicit_provider:
             forced = AgentBrain._call_provider(
                 explicit_provider, model, cloud_keys, messages, temperature
@@ -1227,12 +1282,13 @@ Rules:
                 if any(err_tag in forced for err_tag in
                        ["429", "quota", "rate limit", "Too Many Requests", "exceeded"]):
                     print(f"[Brain] ⚠️ Provider quota error detected: {forced[:100]}")
-                    forced = AgentBrain._failover_llm(
-                        model, cloud_keys, messages, temperature, forced
-                    )
+                    if not free_only:
+                        forced = AgentBrain._failover_llm(
+                            model, cloud_keys, messages, temperature, forced
+                        )
                 # Agent chỉ định rõ provider (đa số agent hiện nay) cũng phải được
                 # cứu khi model suy luận nghĩ hết ngân sách — xem nhánh dưới.
-                if REASONING_STALL in forced and _output_budget(0):
+                if REASONING_STALL in forced and _output_budget(0) and not free_only:
                     alt = AgentBrain._failover_non_reasoning(model, cloud_keys, messages, temperature)
                     if alt:
                         return alt
@@ -1325,11 +1381,12 @@ Rules:
         # ── Auto-Failover on Quota/Rate Limit Errors ──
         if any(err_tag in result for err_tag in ["429", "quota", "rate limit", "Too Many Requests", "exceeded"]):
             print(f"[Brain] ⚠️ Provider quota error detected: {result[:100]}")
-            result = AgentBrain._failover_llm(model, cloud_keys, messages, temperature, result)
+            if not free_only:
+                result = AgentBrain._failover_llm(model, cloud_keys, messages, temperature, result)
         # ── Model suy luận nghĩ hết ngân sách kể cả sau thang thử lại: rơi sang
         # provider KHÁC đã có key (chỉ khi việc này cho phép: output_budget đặt,
         # tức là bước sinh văn bản dài của pipeline, không phải chat thường).
-        if REASONING_STALL in result and _output_budget(0):
+        if REASONING_STALL in result and _output_budget(0) and not free_only:
             alt = AgentBrain._failover_non_reasoning(model, cloud_keys, messages, temperature)
             if alt:
                 return alt

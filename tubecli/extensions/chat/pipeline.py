@@ -1105,6 +1105,14 @@ def _get_skill(skill_id: str) -> Optional[Dict[str, Any]]:
 
 def _route_to_specialist(intent, current_agent: Dict) -> Optional[Dict[str, Any]]:
     """Send domain intents to their specialist, like the bot does."""
+    def routed_config(agent) -> Dict[str, Any]:
+        routed = agent.to_dict()
+        if not routed.get("model") and not routed.get("provider"):
+            for key in ("model", "provider"):
+                if current_agent.get(key):
+                    routed[key] = current_agent[key]
+        return routed
+
     try:
         from tubecli.core.agent import agent_manager
 
@@ -1112,13 +1120,13 @@ def _route_to_specialist(intent, current_agent: Dict) -> Optional[Dict[str, Any]
         if target_id and target_id != current_agent.get("id"):
             agent = agent_manager.get(target_id)
             if agent:
-                return agent.to_dict()
+                return routed_config(agent)
 
         from tubecli.core.specialists import get_specialist_for_intent
 
         specialist = get_specialist_for_intent(intent.intent_type)
         if specialist and specialist.id != current_agent.get("id"):
-            return specialist.to_dict()
+            return routed_config(specialist)
     except Exception as e:
         logger.debug(f"[Chat] Specialist routing skipped: {e}")
     return None

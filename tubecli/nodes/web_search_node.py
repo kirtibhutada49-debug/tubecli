@@ -1,12 +1,12 @@
-"""Built-in node: Web Search — lightweight search via HTTP.
-No browser needed. Uses requests + HTML parsing to extract search results.
-Optimized for speed: parallel requests, short timeouts, multiple fallbacks."""
-from typing import Dict, Any, List
+"""Built-in node: Web Search — DuckDuckGo search with HTML fallbacks."""
+from typing import Dict, Any, List, Optional
 from tubecli.nodes.base_node import BaseNode, PortType
+from ddgs import DDGS
 import requests
 import re
 import concurrent.futures
 import time
+from urllib.parse import urlparse
 
 
 class WebSearchNode(BaseNode):
@@ -22,6 +22,7 @@ class WebSearchNode(BaseNode):
     def _setup_ports(self):
         self.add_input("query", PortType.TEXT, "Search query")
         self.add_output("results", PortType.TEXT, "Search results as formatted text")
+        self.add_output("structured_results", PortType.JSON, "Normalized search result objects")
         self.add_output("raw_html", PortType.TEXT, "Raw HTML snippet (for debugging)")
         self.add_output("status", PortType.TEXT, "Execution status")
 
@@ -29,24 +30,32 @@ class WebSearchNode(BaseNode):
         query = inputs.get("query") or inputs.get("prompt") or inputs.get("text") or self.config.get("query", "")
 
         if not query:
-            return {"results": "", "raw_html": "", "status": "Error: No search query provided"}
+            return {
+                "results": "",
+                "structured_results": [],
+                "raw_html": "",
+                "status": "Error: No search query provided",
+            }
 
         print(f"  [WebSearch] Searching: {query}")
         start = time.time()
 
         try:
-            results_text = self._fast_search(query)
+            results = self._search(query)
+            results_text = self._format_results(query, results)
             elapsed = time.time() - start
             if results_text:
                 print(f"  [WebSearch] ✅ Got results in {elapsed:.1f}s")
                 return {
                     "results": results_text,
+                    "structured_results": results,
                     "raw_html": "",
                     "status": f"✅ Found results for: {query} ({elapsed:.1f}s)",
                 }
             else:
                 return {
                     "results": f"No results found for: {query}",
+                    "structured_results": [],
                     "raw_html": "",
                     "status": "⚠️ No results",
                 }
@@ -55,55 +64,94 @@ class WebSearchNode(BaseNode):
             print(f"  [WebSearch] ❌ Error after {elapsed:.1f}s: {e}")
             return {
                 "results": f"Search error: {e}",
+                "structured_results": [],
                 "raw_html": "",
                 "status": f"❌ Error: {e}",
             }
 
-    def _fast_search(self, query: str, num_results: int = 6) -> str:
-        """Fast search: try DuckDuckGo first (most reliable), then Google fallback.
-        Uses short timeouts to avoid blocking."""
-        
-        # Strategy: DuckDuckGo HTML is the most reliable for programmatic access
-        # Google often returns CAPTCHAs or blocks bot requests
-        
-        results = []
-        
-        # 1. Try DuckDuckGo first (fast, reliable, no CAPTCHA)
-        try:
-            results = self._duckduckgo_search(query)
-        except Exception as e:
-            print(f"  [WebSearch] DuckDuckGo failed: {e}")
-        
-        # 2. If DuckDuckGo failed, try Google
-        if not results:
-            try:
-                results = self._google_search_fast(query)
-            except Exception as e:
-                print(f"  [WebSearch] Google failed: {e}")
-        
-        # 3. If both failed, try DuckDuckGo Lite (minimal HTML, ultra-fast)
-        if not results:
-            try:
-                results = self._duckduckgo_lite(query)
-            except Exception:
-                pass
+    @staticmethod
+    def _normalize_result(result: Dict[str, Any], source: Optional[str] = None) -> Dict[str, Any]:
+        url = result.get("url") or result.get("href") or result.get("link") or ""
+        result_source = (
+            result.get("source")
+            or (urlparse(url).netloc if url else "")
+            or source
+            or "DuckDuckGo"
+        )
+        return {
+            "title": result.get("title") or "",
+            "url": url,
+            "snippet": result.get("snippet") or result.get("body") or "",
+            "published_date": (
+                result.get("published_date")
+                or result.get("date")
+                or result.get("published")
+            ),
+            "source": result_source or "",
+        }
 
+    @staticmethod
+    def _is_news_query(query: str) -> bool:
+        return bool(re.search(
+            r"\b(news|latest|current|today|recent|breaking|headlines|newsworthy)\b",
+            query,
+            re.IGNORECASE,
+        ))
+
+    def _search(self, query: str, num_results: int = 6) -> List[Dict[str, Any]]:
+        """Use DDGS text/news search first, retaining HTML scraping as fallback."""
+        try:
+            with DDGS() as ddgs:
+                if self._is_news_query(query):
+                    raw_results = list(ddgs.news(query, max_results=num_results))
+                    source = "news"
+                else:
+                    raw_results = list(ddgs.text(query, max_results=num_results))
+                    source = "web"
+            results = [self._normalize_result(result, source) for result in raw_results]
+            results = [result for result in results if result["title"] or result["url"]]
+            if results:
+                return results[:num_results]
+        except Exception as e:
+            print(f"  [WebSearch] DDGS search failed: {e}")
+
+        return [
+            self._normalize_result(result, "web")
+            for result in self._html_search(query, num_results)
+        ]
+
+    def _html_search(self, query: str, num_results: int) -> List[Dict[str, Any]]:
+        results = []
+        for provider, search in (
+            ("DuckDuckGo", self._duckduckgo_search),
+            ("Google", self._google_search_fast),
+            ("DuckDuckGo Lite", self._duckduckgo_lite),
+        ):
+            try:
+                results = search(query)
+            except Exception as e:
+                print(f"  [WebSearch] {provider} fallback failed: {e}")
+            if results:
+                break
+        return results[:num_results]
+
+    @staticmethod
+    def _format_results(query: str, results: List[Dict[str, Any]]) -> str:
         if not results:
             return ""
 
-        # Format results as readable text
         lines = [f"🔍 Kết quả tìm kiếm: \"{query}\"\n"]
-        for i, r in enumerate(results[:num_results], 1):
-            title = r.get("title", "No title")
-            snippet = r.get("snippet", "")
-            link = r.get("link", "")
-            lines.append(f"{i}. {title}")
-            if snippet:
-                lines.append(f"   {snippet}")
-            if link:
-                lines.append(f"   🔗 {link}")
+        for i, result in enumerate(results, 1):
+            lines.append(f"{i}. {result['title'] or 'No title'}")
+            if result["snippet"]:
+                lines.append(f"   Snippet: {result['snippet']}")
+            if result["url"]:
+                lines.append(f"   URL: {result['url']}")
+            if result["published_date"]:
+                lines.append(f"   Published: {result['published_date']}")
+            if result["source"]:
+                lines.append(f"   Source: {result['source']}")
             lines.append("")
-
         return "\n".join(lines)
 
     def _duckduckgo_search(self, query: str) -> list:

@@ -6,6 +6,7 @@ python-multipart>=0.0.6
 uuid7
 aiohttp
 requests
+ddgs>=9.0.0
 rich>=13.0
 pyotp>=2.9
 gmssl

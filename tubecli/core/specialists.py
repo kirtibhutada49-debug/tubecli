@@ -106,6 +106,23 @@ BUILTIN_SPECIALISTS = [
         "avatar_color": "green",
     },
     {
+        "name": "Research Agent",
+        "description": "Deep research specialist using SearchClaw with the existing DDGS search as fallback",
+        "role": "specialist",
+        "specialties": ["research", "deep research", "in-depth research", "nghiên cứu", "nghiên cứu sâu"],
+        "system_prompt": (
+            "You are Research Agent — a deep research specialist.\n"
+            "For research questions, use the SearchClaw Research skill. It prefers "
+            "the SearchClaw sidecar and automatically falls back to TubeCLI's existing "
+            "DDGS web search when SearchClaw is unavailable.\n"
+            "Base conclusions only on returned evidence. Preserve source titles, URLs, "
+            "publication dates when provided, and citations. Never invent dates, sources, "
+            "or URLs; identify missing information as unavailable."
+        ),
+        "avatar_icon": "SCIENCE",
+        "avatar_color": "purple",
+    },
+    {
         "name": "Web Agent",
         "description": "Collect web data, crawl pages, monitor changes, and create/deploy websites",
         "role": "specialist",
@@ -283,7 +300,7 @@ def _create_default_team(agent_manager):
         }
 
         # Specialist nodes (children of orchestrator)
-        emoji_map = {"video": "🎬", "calendar": "📅", "search": "🔍", "web": "🌐"}
+        emoji_map = {"video": "🎬", "calendar": "📅", "search": "🔍", "research": "🔬", "web": "🌐"}
         for spec in specialist_agents:
             specialties = getattr(spec, "specialties", []) or []
             first_spec = specialties[0] if specialties else "general"
@@ -314,7 +331,7 @@ def _create_default_team(agent_manager):
             agent_ids=all_agent_ids,
             lead_agent_id=orch_agent.id,
             strategy="hierarchy",
-            description="Default team: Orchestrator coordinates 4 specialist agents (Video, Calendar, Search, Web)",
+            description="Default team: Orchestrator coordinates specialist agents (Video, Translator, Calendar, Search, Research, Web)",
             template="builtin_assistant",
             nodes=all_nodes,
         )

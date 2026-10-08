@@ -6,12 +6,24 @@ Equivalent to "Bots" in python-video-studio.
 import json
 import uuid
 import datetime
-from typing import Dict, List, Optional, Any
+import os
+import tempfile
+import threading
+from contextlib import contextmanager
+from typing import Dict, List, Optional, Any, Iterable
 from pathlib import Path
 
 from tubecli.config import SKILLS_FILE, ensure_data_dirs
 
 _CACHE_SALT = "69e3c14f36a9901d"
+_FILE_LOCKS_GUARD = threading.Lock()
+_FILE_LOCKS: Dict[Path, threading.RLock] = {}
+
+
+def _thread_lock_for(path: Path) -> threading.RLock:
+    resolved = path.resolve()
+    with _FILE_LOCKS_GUARD:
+        return _FILE_LOCKS.setdefault(resolved, threading.RLock())
 
 
 class Skill:
@@ -138,60 +150,158 @@ class SkillManager:
         ensure_data_dirs()
         self._load()
 
-    def _load(self):
-        if self.skills_file.exists():
-            try:
-                with open(self.skills_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.skills = {item["id"]: Skill.from_dict(item) for item in data}
-            except Exception as e:
-                print(f"[SkillManager] Error loading skills: {e}")
-                self.skills = {}
+    @contextmanager
+    def _file_lock(self):
+        """Serialize skill-store access between threads and TubeCLI processes."""
+        self.skills_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.skills_file.with_name(self.skills_file.name + ".lock")
+        thread_lock = _thread_lock_for(lock_path)
+        with thread_lock:
+            with open(lock_path, "a+b") as lock_file:
+                if os.name == "nt":
+                    import msvcrt
 
-    def _save(self):
+                    lock_file.seek(0)
+                    if lock_file.read(1) == b"":
+                        lock_file.write(b"\0")
+                        lock_file.flush()
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                    try:
+                        yield
+                    finally:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    try:
+                        yield
+                    finally:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _read_skills(self) -> Dict[str, Skill]:
+        if not self.skills_file.exists():
+            return {}
+        with open(self.skills_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            raise ValueError(f"Skill store must contain a JSON list: {self.skills_file}")
+        return {item["id"]: Skill.from_dict(item) for item in data}
+
+    def _load(self):
         try:
-            self.skills_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.skills_file, "w", encoding="utf-8") as f:
+            with self._file_lock():
+                self.skills = self._read_skills()
+        except Exception as e:
+            print(f"[SkillManager] Error loading skills: {e}")
+            self.skills = {}
+
+    def _write_skills(self):
+        self.skills_file.parent.mkdir(parents=True, exist_ok=True)
+        file_mode = self.skills_file.stat().st_mode & 0o777 if self.skills_file.exists() else None
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{self.skills_file.name}.",
+            suffix=".tmp",
+            dir=self.skills_file.parent,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(
                     [s.to_dict() for s in self.skills.values()],
                     f, indent=2, ensure_ascii=False,
                 )
-        except Exception as e:
-            print(f"[SkillManager] Error saving skills: {e}")
+                f.flush()
+                os.fsync(f.fileno())
+            if file_mode is not None:
+                os.chmod(temp_name, file_mode)
+            os.replace(temp_name, self.skills_file)
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def _refresh_locked(self):
+        self.skills = self._read_skills()
 
     # ── Public API ────────────────────────────────────────────────
 
     def create(self, **kwargs) -> Skill:
-        skill = Skill(**kwargs)
-        self.skills[skill.id] = skill
-        self._save()
+        with self._file_lock():
+            self._refresh_locked()
+            skill = Skill(**kwargs)
+            self.skills[skill.id] = skill
+            self._write_skills()
         return skill
 
+    def create_many(self, skills: Iterable[Skill]) -> List[Skill]:
+        """Persist a set of new skills in one locked, atomic file replacement."""
+        pending = list(skills)
+        if not pending:
+            return []
+
+        with self._file_lock():
+            self._refresh_locked()
+            ids = [skill.id for skill in pending]
+            if len(ids) != len(set(ids)) or any(skill_id in self.skills for skill_id in ids):
+                raise ValueError("A skill ID conflicts with an existing or bundled skill.")
+
+            names = {
+                self._normalize_name(skill.name) or skill.name.casefold()
+                for skill in self.skills.values()
+            }
+            pending_names = set()
+            for skill in pending:
+                normalized = self._normalize_name(skill.name) or skill.name.casefold()
+                if normalized in names or normalized in pending_names:
+                    raise ValueError(f"A skill named {skill.name!r} is already registered.")
+                pending_names.add(normalized)
+
+            original = self.skills
+            self.skills = {**self.skills, **{skill.id: skill for skill in pending}}
+            try:
+                self._write_skills()
+            except Exception:
+                self.skills = original
+                raise
+        return pending
+
     def update(self, skill_id: str, **updates) -> Optional[Skill]:
-        if skill_id not in self.skills:
-            return None
-        skill = self.skills[skill_id]
-        for k, v in updates.items():
-            # Skip read-only/computed fields (e.g. is_runnable is a property)
-            if k in ("is_runnable", "id"):
-                continue
-            if hasattr(skill, k):
-                setattr(skill, k, v)
-        self._save()
+        with self._file_lock():
+            self._refresh_locked()
+            if skill_id not in self.skills:
+                return None
+            skill = self.skills[skill_id]
+            for k, v in updates.items():
+                # Skip read-only/computed fields (e.g. is_runnable is a property)
+                if k in ("is_runnable", "id"):
+                    continue
+                if hasattr(skill, k):
+                    setattr(skill, k, v)
+            self._write_skills()
         return skill
 
     def delete(self, skill_id: str) -> bool:
-        if skill_id in self.skills:
-            del self.skills[skill_id]
-            self._save()
-            return True
-        return False
+        with self._file_lock():
+            self._refresh_locked()
+            if skill_id in self.skills:
+                del self.skills[skill_id]
+                self._write_skills()
+                return True
+            return False
 
     def get(self, skill_id: str) -> Optional[Skill]:
-        return self.skills.get(skill_id)
+        with self._file_lock():
+            self._refresh_locked()
+            return self.skills.get(skill_id)
 
     def get_all(self) -> List[Skill]:
-        return list(self.skills.values())
+        with self._file_lock():
+            self._refresh_locked()
+            return list(self.skills.values())
 
     @staticmethod
     def _normalize_name(name: str) -> str:
@@ -204,18 +314,19 @@ class SkillManager:
         if not name:
             return None
         normalized = self._normalize_name(name)
-        for skill in self.skills.values():
+        skills = self.get_all()
+        for skill in skills:
             if skill.name.lower() == name.lower():
                 return skill
             if normalized and self._normalize_name(skill.name) == normalized:
                 return skill
         # Substring match (e.g. "Google Sheets" vs "📊 Google Sheets Manager")
         if normalized and len(normalized) >= 4:
-            for skill in self.skills.values():
+            for skill in skills:
                 if normalized in self._normalize_name(skill.name):
                     return skill
         # Also check commands
-        for skill in self.skills.values():
+        for skill in skills:
             if skill.commands and name in skill.commands:
                 return skill
         return None

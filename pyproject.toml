@@ -31,6 +31,7 @@ dependencies = [
     "uuid7",
     "aiohttp",
     "requests",
+    "ddgs>=9.0.0",
     "psutil",
     "rich>=13.0",
     "pyotp>=2.9",

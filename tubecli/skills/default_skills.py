@@ -63,8 +63,26 @@ DEFAULT_SKILLS: List[Dict] = [
                     "label": "🤖 AI Summarizer",
                     "config": {
                         "provider": "auto",
-                        "system_prompt": "You are an AI assistant. The user has performed a Google search, and the results are below. Please summarize them briefly and clearly in the user's language. If there is weather information, news, or specific data, present it clearly. Answer naturally and in a friendly manner.",
-                        "max_tokens": 1024,
+                        "use_parent_agent_model": True,
+                        "system_prompt": (
+                            "You are an AI assistant summarizing live Google Search results. "
+                            "Use only facts supported by the supplied results; never use model "
+                            "knowledge to invent current facts. For current-data, news, or research "
+                            "queries, format each result as:\n"
+                            "### 1. <Title>\n"
+                            "Source: <source, or 'not verified'>\n"
+                            "Date: <publication date, or 'not available'>\n"
+                            "URL: <real URL, or 'not verified'>\n"
+                            "Summary: <2-3 factual sentences based only on the result>\n"
+                            "Why it matters: <1 sentence>\n"
+                            "Repeat this complete format for every supplied result. Never output "
+                            "only a title or omit a field. Clearly say when a date or source cannot be "
+                            "verified; generic labels such as 'news' or 'web' are not verified "
+                            "publication sources. If there are no usable live results, reply exactly "
+                            "'LIVE SEARCH FAILED'. For other queries, preserve the existing "
+                            "natural, concise summary behavior."
+                        ),
+                        "max_tokens": 2048,
                         "temperature": 0.5,
                     },
                 },
@@ -89,9 +107,94 @@ DEFAULT_SKILLS: List[Dict] = [
                     "to_port_id": "prompt",
                 },
                 {
+                    "from_node_id": "web_search",
+                    "from_port_id": "structured_results",
+                    "to_node_id": "ai_summarize",
+                    "to_port_id": "context",
+                },
+                {
                     "from_node_id": "ai_summarize",
                     "from_port_id": "response",
                     "to_node_id": "result_output",
+                    "to_port_id": "data",
+                },
+            ],
+        },
+    },
+    {
+        "name": "🔬 SearchClaw Research",
+        "description": "Deep, cited web research through the optional SearchClaw sidecar. Automatically falls back to TubeCLI's existing DDGS search when SearchClaw is unavailable.",
+        "skill_type": "Skill",
+        "commands": ["research", "deep research", "in-depth research", "nghiên cứu", "nghiên cứu sâu"],
+        "workflow_data": {
+            "name": "SearchClaw Research",
+            "nodes": [
+                {
+                    "id": "research_query",
+                    "type": "text_input",
+                    "label": "🔬 Research Question",
+                    "config": {"text": ""},
+                },
+                {
+                    "id": "research_search",
+                    "type": "searchclaw_research",
+                    "label": "🔎 SearchClaw (DDGS fallback)",
+                    "config": {},
+                },
+                {
+                    "id": "research_summarize",
+                    "type": "model_agent",
+                    "label": "🤖 Evidence Synthesis",
+                    "config": {
+                        "provider": "auto",
+                        "use_parent_agent_model": True,
+                        "system_prompt": (
+                            "You are synthesizing a research question from the supplied live "
+                            "research answer and evidence. Use only the supplied evidence; do "
+                            "not add facts from model memory or invent dates, source names, or "
+                            "URLs. Return at least five distinct sources when at least five are "
+                            "available. For each source give title, source/publisher, publication "
+                            "date only when supplied (otherwise say 'not available'), URL, a brief "
+                            "evidence-based summary, and why it matters. Preserve citations and "
+                            "clearly label unavailable fields. Use publication dates only from "
+                            "the matching source's Date field; ignore uncited date claims in the "
+                            "overall research narrative. If fewer than five usable sources were "
+                            "returned, say so explicitly."
+                        ),
+                        "max_tokens": 4096,
+                        "temperature": 0.3,
+                    },
+                },
+                {
+                    "id": "research_output",
+                    "type": "output",
+                    "label": "📤 Research Report",
+                    "config": {"print": True},
+                },
+            ],
+            "connections": [
+                {
+                    "from_node_id": "research_query",
+                    "from_port_id": "content",
+                    "to_node_id": "research_search",
+                    "to_port_id": "query",
+                },
+                {
+                    "from_node_id": "research_query",
+                    "from_port_id": "content",
+                    "to_node_id": "research_summarize",
+                    "to_port_id": "prompt",
+                },
+                {
+                    "from_node_id": "research_search",
+                    "from_port_id": "results",
+                    "to_node_id": "research_summarize",
+                    "to_port_id": "context",
+                },
+                {
+                    "from_node_id": "research_summarize",
+                    "from_port_id": "response",
+                    "to_node_id": "research_output",
                     "to_port_id": "data",
                 },
             ],

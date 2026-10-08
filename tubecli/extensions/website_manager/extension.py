@@ -528,6 +528,8 @@ def _deploy_site_background(
     """Delegate full deploy pipeline to Node.js runner script for maximum speed and non-blocking execution."""
     site_path = os.path.join(BUILD_DIR, site_name)
     config_file = os.path.join(BUILD_DIR, f"config_{site_name}.json")
+    local_only = not (cf_api_token and cf_account_id)
+    preserve_build = False
     # Toàn bộ body trong try/finally: preamble (ghi config) cũng có thể ném
     # (os.replace PermissionError...) — finally PHẢI luôn nhả deploy-lock, nếu
     # không site kẹt 409 vĩnh viễn.
@@ -541,6 +543,30 @@ def _deploy_site_background(
             os.chmod(log_path, 0o600)
         except Exception:
             pass
+
+        if local_only:
+            _write_log(site_name, f"=== TẠO WEBSITE PROJECT CỤC BỘ: {site_name} ===\n\n")
+            os.makedirs(BUILD_DIR, exist_ok=True)
+            shutil.rmtree(site_path, ignore_errors=True)
+            _run_cmd(
+                site_name,
+                ["git", "-c", "credential.helper=", "clone", "--depth=1", "--", github_url, site_path],
+                BUILD_DIR,
+                timeout=600,
+            )
+            preserve_build = True
+            if os.path.isfile(os.path.join(site_path, "package.json")):
+                _run_cmd(site_name, ["npm", "install", "--prefer-offline"], site_path, timeout=900)
+            website_manager.update_website(
+                site_name,
+                status="active",
+                deploy_url="",
+                deployment_mode="local",
+                local_project_path=site_path,
+            )
+            _write_log(site_name, f"\n✅ Project website đã tạo tại: {site_path}\n"
+                                  "Cloudflare chưa được cấu hình; deployment đã được bỏ qua.\n")
+            return
 
         _write_log(site_name, f"=== DEPLOY BẮT ĐẦU (NODE ENGINE): {site_name} ===\n\n")
 
@@ -614,7 +640,12 @@ def _deploy_site_background(
             if urls:
                 deploy_url = urls[-1]
 
-        update = {"status": "active", "deploy_url": deploy_url}
+        update = {
+            "status": "active",
+            "deploy_url": deploy_url,
+            "deployment_mode": "cloudflare",
+            "local_project_path": "",
+        }
         if wp_token:
             update["wp_token"] = wp_token
         # Seed admin thất bại dù có nhập mật khẩu → site đang dùng mật khẩu MẶC ĐỊNH
@@ -643,7 +674,8 @@ def _deploy_site_background(
         try:
             if os.path.exists(config_file):
                 os.remove(config_file)
-            shutil.rmtree(site_path, ignore_errors=True)
+            if not preserve_build:
+                shutil.rmtree(site_path, ignore_errors=True)
         except Exception:
             pass
         release_deploy(site_name)

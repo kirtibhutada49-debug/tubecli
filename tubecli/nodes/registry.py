@@ -19,6 +19,7 @@ from tubecli.nodes.google_calendar_node import GoogleCalendarNode
 from tubecli.nodes.browser_node import BrowserNode
 from tubecli.nodes.json_parser_node import JsonParserNode
 from tubecli.nodes.web_search_node import WebSearchNode
+from tubecli.nodes.searchclaw_node import SearchClawResearchNode
 from tubecli.nodes.model_agent_node import ModelAgentNode
 from tubecli.nodes.custom_node import CustomNode
 from tubecli.nodes.if_node import IfNode
@@ -47,6 +48,7 @@ NODE_REGISTRY: Dict[str, Type[BaseNode]] = {
     "browser_action": BrowserNode,
     "json_parser": JsonParserNode,
     "web_search": WebSearchNode,
+    "searchclaw_research": SearchClawResearchNode,
     "model_agent": ModelAgentNode,
     "custom": CustomNode,
     "if_node": IfNode,
@@ -247,6 +249,7 @@ def list_available_nodes() -> list:
         "browser_action": "🌐",
         "json_parser": "📋", "model_agent": "🤖", "custom": "⚙️",
         "if_node": "🔀", "switch_node": "🔃", "merge_node": "🔗",
+        "searchclaw_research": "🔬",
     }
     for key, cls in NODE_REGISTRY.items():
         if cls not in seen:

@@ -122,9 +122,11 @@ class Scheduler:
                     if self._runner_callback:
                         self._runner_callback(skill.id)
 
-                    skill.last_run = now.isoformat()
-                    skill.next_run = self._calc_next_run(skill)
-                    skill_manager._save()
+                    skill_manager.update(
+                        skill.id,
+                        last_run=now.isoformat(),
+                        next_run=self._calc_next_run(skill),
+                    )
                     self._log_history(skill.name, skill.id)
             except ValueError:
                 pass

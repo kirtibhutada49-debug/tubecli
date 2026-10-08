@@ -117,3 +117,47 @@ def show_skill(name):
     console.print(f"\n⚡ [bold cyan]{skill.name}[/bold cyan]")
     console.print(json.dumps(skill.to_dict(), indent=2, ensure_ascii=False))
     console.print()
+
+
+@skill_cmd.command("import")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+def import_skill(path):
+    """Import a local SKILL.md as a TubeCLI Markdown skill."""
+    from tubecli.core.skill_importer import SkillImportError, import_skill_from_file
+
+    try:
+        skill = import_skill_from_file(path)
+    except SkillImportError as exc:
+        raise click.ClickException(str(exc)) from exc
+    console.print(f"[green]Imported skill:[/green] {skill.name} ({skill.id})")
+
+
+@skill_cmd.command("import-bundle")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=str))
+@click.option("--dry-run", is_flag=True, help="Validate and report without importing.")
+def import_skill_bundle_cmd(path, dry_run):
+    """Validate and atomically import Skills from a local bundle directory."""
+    from tubecli.core.skill_bundle_importer import import_skill_bundle
+
+    report = import_skill_bundle(path, dry_run=dry_run)
+    console.print(f"BUNDLE_NAME: {report['bundle_name']}")
+    console.print(f"SKILLS_FOUND: {report['skills_found']}")
+    console.print(f"SKILLS_VALID: {report['skills_valid']}")
+    console.print(f"SKILLS_INVALID: {report['skills_invalid']}")
+    console.print(f"DUPLICATES: {report['duplicates']}")
+    console.print(f"PAID_DEPENDENCIES: {report['paid_dependencies']}")
+    console.print(f"SECURITY_ERRORS: {report['security_errors']}")
+    console.print(f"IMPORTABLE: {'YES' if report['importable'] else 'NO'}")
+    console.print(f"IMPORTED_COUNT: {report['imported_count']}")
+    console.print(f"ROLLBACK_OCCURRED: {'YES' if report['rollback_occurred'] else 'NO'}")
+    if report["unsupported_scripts"]:
+        console.print(f"UNSUPPORTED_SCRIPTS (inert): {report['unsupported_scripts']}")
+    if report["validation_errors"]:
+        console.print(f"VALIDATION_ERRORS: {report['validation_errors']}")
+    if dry_run and report["importable"]:
+        console.print("[cyan]Dry run: no skills were imported.[/cyan]")
+    elif report["imported_skills"]:
+        for skill in report["imported_skills"]:
+            console.print(f"[green]Imported:[/green] {skill['name']} ({skill['id']})")
+    if not report["importable"]:
+        raise click.ClickException("Skill bundle validation/import failed.")

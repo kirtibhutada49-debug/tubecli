@@ -256,11 +256,6 @@ async def deploy_website(req: DeployWebsiteRequest):
         except Exception:
             pass
 
-    if not cf_api_token:
-        raise HTTPException(400, "CF API Token là bắt buộc (nhập tực tiếp hoặc lưu trong Cloud Keys → Cloudflare).")
-    if not cf_account_id:
-        raise HTTPException(400, "CF Account ID là bắt buộc.")
-
     # Deploy-lock: chặn 2 lần deploy song song cùng một site (nếu không, 2 runner
     # cùng xóa/ghi build/{name} + config_{name}.json phá build của nhau).
     if not try_acquire_deploy(req.name):
@@ -302,6 +297,13 @@ async def deploy_website(req: DeployWebsiteRequest):
         release_deploy(req.name)
         raise
 
+    if not (cf_api_token and cf_account_id):
+        return {
+            "status": "ok",
+            "message": f"Tạo project '{req.name}' cục bộ đã bắt đầu; Cloudflare deployment được bỏ qua.",
+            "site_name": req.name,
+            "deployment_mode": "local",
+        }
     return {"status": "ok", "message": f"Deploy '{req.name}' đã bắt đầu.", "site_name": req.name}
 
 
@@ -526,15 +528,13 @@ async def skill_deploy_website(req: SkillTextRequest):
     cf_api_token = (creds.get("api_token") or "").strip()
     cf_account_id = (creds.get("account_id") or "").strip()
     cf_email = (creds.get("email") or "").strip()
-    if not cf_api_token or not cf_account_id:
-        return {"report": "⚠️ Chưa cấu hình Cloudflare. Vào giao diện Website Manager → "
-                          "'Cloudflare Credentials' để thêm API Token + Account ID trước khi tạo web."}
+    local_only = not (cf_api_token and cf_account_id)
 
     if mgr.get_website(name):
         return {"report": f"⚠️ Website '{name}' đã tồn tại. Chọn tên khác hoặc xóa site cũ."}
 
-    # 4) Mật khẩu admin sinh tự động (an toàn)
-    admin_password = "wm" + secrets.token_urlsafe(9)
+    # 4) Mật khẩu admin chỉ cần khi có thể deploy lên Cloudflare.
+    admin_password = "" if local_only else "wm" + secrets.token_urlsafe(9)
 
     if not try_acquire_deploy(name):
         return {"report": f"⏳ '{name}' đang được deploy rồi. Xem tiến trình trong giao diện."}
@@ -553,6 +553,10 @@ async def skill_deploy_website(req: SkillTextRequest):
         release_deploy(name)
         return {"report": f"❌ Không khởi động được deploy: {e}"}
 
+    if local_only:
+        return {"report": f"📦 Đã bắt đầu tạo project website '{name}' tại máy này từ template "
+                          f"'{matched_tmpl.get('id')}'. Cloudflare chưa được cấu hình nên sẽ không deploy.\n"
+                          f"Theo dõi tiến trình trong giao diện Website Manager (mục Deploy Log)."}
     return {"report": f"🚀 Đã bắt đầu tạo website '{name}' từ template '{matched_tmpl.get('id')}'.\n"
                       f"Theo dõi tiến trình real-time trong giao diện Website Manager (mục Deploy Log).\n"
                       f"🔑 Mật khẩu admin (tự sinh, hãy lưu lại): {admin_password}\n"

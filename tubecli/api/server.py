@@ -6,6 +6,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 import os, sys
 import mimetypes
 import random  # module-level for the schedule behavior helpers below
@@ -3866,21 +3867,212 @@ async def agent_chat(agent_id: str, req: ChatRequest):
         raise HTTPException(404, f"Agent {agent_id} not found")
 
     agent_dict = agent.to_dict()
+    home_agent_dict = agent_dict
+    memory_agent_dict = home_agent_dict
 
-    # Get agent's allowed skills
+    # Keep the persisted agent skill list untouched; choose skills per turn.
     all_skills = skill_manager.get_all()
     if agent.allowed_skills:
-        skills = [s.to_dict() for s in all_skills if s.id in agent.allowed_skills]
+        available_skills = [s.to_dict() for s in all_skills if s.id in agent.allowed_skills]
     else:
-        skills = [s.to_dict() for s in all_skills]  # allow all if not restricted
+        available_skills = [s.to_dict() for s in all_skills]
 
-    # Call brain
-    brain_result = AgentBrain.chat(
-        message=req.message,
-        agent=agent_dict,
-        skills=skills,
-        history=agent.history_log or [],
+    from tubecli.core.skill_selector import skill_selector
+
+    company_plan = None
+    company_notice = ""
+    routable_capabilities = []
+    import company_router
+
+    repo_root = Path(__file__).resolve().parents[2]
+    runtime_data = repo_root / "data"
+    router_data_paths = (
+        runtime_data / "company_registry.json",
+        runtime_data / "capability_evidence.index.json",
+        runtime_data / "capability_bindings.json",
     )
+    if router_data_paths != (
+        company_router.REGISTRY,
+        company_router.EVIDENCE,
+        company_router.BINDINGS,
+    ):
+        company_router.DATA_DIR = runtime_data
+        company_router.REGISTRY, company_router.EVIDENCE, company_router.BINDINGS = router_data_paths
+        company_router._data_loaded = False
+
+    plan_company_task = company_router.plan
+    workflow_matches = company_router.workflow_matches
+
+    if workflow_matches(req.message):
+        try:
+            company_plan = plan_company_task(req.message)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(503, f"Company Router data is unavailable: {exc}") from exc
+
+    if company_plan:
+        execution_capabilities = list(company_plan.get("execution_capabilities", []))
+        available_by_id = {skill["id"]: skill for skill in all_skills
+                           if skill.get("id")}
+        routable_capabilities = []
+        review_capabilities = list(company_plan.get("review_capabilities", []))
+        for capability in execution_capabilities:
+            capability_name = capability.get("capability") if isinstance(capability, dict) else None
+            skill_ids = capability.get("skill_ids", []) if isinstance(capability, dict) else []
+            binding_ready = (
+                capability.get("status") == "PASS"
+                and str(capability.get("binding_status") or "").strip().upper() == "READY"
+            ) if isinstance(capability, dict) else False
+            if (
+                binding_ready
+                and isinstance(skill_ids, list)
+                and skill_ids
+                and all(isinstance(skill_id, str) and skill_id in available_by_id for skill_id in skill_ids)
+            ):
+                routable_capabilities.append(capability)
+            elif capability_name:
+                review_capabilities.append(capability_name)
+        company_plan["review_capabilities"] = list(dict.fromkeys(review_capabilities))
+        company_plan["execution_capabilities"] = routable_capabilities
+
+        target_agent = None
+        for capability in routable_capabilities:
+            for name in capability.get("agents", []):
+                target_agent = agent_manager.find_by_name(name)
+                if target_agent:
+                    break
+            if target_agent:
+                break
+
+        if routable_capabilities and target_agent:
+            agent_dict = target_agent.to_dict()
+            skill_ids = list(dict.fromkeys(
+                skill_id
+                for capability in routable_capabilities
+                for skill_id in capability["skill_ids"]
+            ))
+            selected_skills = skill_selector.select(
+                req.message,
+                "complex_action",
+                list(available_by_id.values()),
+                matched_skill_ids=skill_ids,
+                limit=len(skill_ids),
+            )
+            if {skill["id"] for skill in selected_skills} != set(skill_ids):
+                company_plan["review_capabilities"].extend(
+                    capability["capability"] for capability in routable_capabilities
+                )
+                company_plan["execution_capabilities"] = []
+                routable_capabilities = []
+            else:
+                from tubecli.core.brain import pick_9router_model
+
+                router_model = pick_9router_model()
+                if not router_model:
+                    raise HTTPException(
+                        503,
+                        "9Router has no available model; paid fallback is disabled.",
+                    )
+                agent_dict["provider"] = "9router"
+                agent_dict["model"] = router_model
+                agent_dict["_tubecli_free_only"] = True
+                memory_agent_dict = {
+                    **home_agent_dict,
+                    "provider": "9router",
+                    "model": router_model,
+                    "_tubecli_free_only": True,
+                }
+
+                executable = ", ".join(
+                    capability["capability"].replace("_", " ")
+                    for capability in routable_capabilities
+                )
+                planning_only = ", ".join(
+                    name.replace("_", " ")
+                    for name in company_plan.get("planning_only_capabilities", [])
+                )
+                blocked = ", ".join(
+                    name.replace("_", " ")
+                    for name in company_plan.get("review_capabilities", [])
+                )
+                scope = [
+                    "Company Router execution scope:",
+                    f"EXECUTE only these bound capabilities: {executable}.",
+                    "PLAN ONLY; do not execute these capabilities: " + (planning_only or "none") + ".",
+                    "BLOCKED / REVIEW; do not claim or attempt execution: " + (blocked or "none") + ".",
+                ]
+                if company_plan.get("company"):
+                    scope.append(f"Company Registry match: {company_plan['company']}.")
+                agent_dict["system_prompt"] = (
+                    str(agent_dict.get("system_prompt") or "")
+                    + "\n\n"
+                    + "\n".join(scope)
+                )
+                company_notice = (
+                    f"\n\nExecuted scope: {executable}."
+                    f"\nPlan only: {planning_only or 'none'}."
+                    f"\nBlocked/review: {blocked or 'none'}."
+                )
+        else:
+            company_plan["review_capabilities"].extend(
+                capability["capability"] for capability in routable_capabilities
+            )
+            company_plan["execution_capabilities"] = []
+            routable_capabilities = []
+
+        if routable_capabilities and (
+            company_plan.get("planning_only_capabilities")
+            or company_plan.get("review_capabilities")
+        ):
+            company_plan["status"] = "MIXED"
+        elif routable_capabilities:
+            company_plan["status"] = "READY"
+        elif company_plan.get("planning_only_capabilities") and not company_plan.get("review_capabilities"):
+            company_plan["status"] = "PLAN_ONLY"
+        else:
+            company_plan["status"] = "REVIEW"
+        company_plan["execution_allowed"] = bool(routable_capabilities)
+
+        if not routable_capabilities:
+            planning_only = ", ".join(
+                name.replace("_", " ")
+                for name in company_plan.get("planning_only_capabilities", [])
+            )
+            blocked = ", ".join(
+                dict.fromkeys(
+                    name.replace("_", " ")
+                    for name in company_plan.get("review_capabilities", [])
+                )
+            )
+            company_notice = (
+                "No capability is authorized for execution."
+                f"\nPlan only: {planning_only or 'none'}."
+                f"\nBlocked/review: {blocked or 'none'}."
+            )
+            brain_result = {"reply": company_notice, "action": None}
+        else:
+            from tubecli.core.brain import AgentBrain
+
+            brain_result = AgentBrain.chat(
+                message=req.message,
+                agent=agent_dict,
+                skills=selected_skills,
+                history=agent.history_log or [],
+            )
+    else:
+        selected_skills = skill_selector.select(
+            req.message,
+            "complex_action",
+            available_skills,
+            limit=3,
+        )
+        from tubecli.core.brain import AgentBrain
+
+        brain_result = AgentBrain.chat(
+            message=req.message,
+            agent=agent_dict,
+            skills=selected_skills,
+            history=agent.history_log or [],
+        )
 
     reply = brain_result["reply"]
     skill_used = None
@@ -4075,6 +4267,9 @@ async def agent_chat(agent_id: str, req: ChatRequest):
             from tubecli.i18n import t
             reply = t("brain.skill_create_error", error=str(e))
 
+    if company_notice and routable_capabilities:
+        reply = str(reply) + company_notice
+
     # Save to history
     history = agent.history_log or []
     history.append({"role": "user", "content": req.message, "timestamp": _dt.datetime.now().isoformat()})
@@ -4092,7 +4287,7 @@ async def agent_chat(agent_id: str, req: ChatRequest):
     async def _bg_memory_update():
         try:
             from tubecli.core.brain import AgentBrain
-            AgentBrain.post_chat_memory_update(agent_id, agent_dict, history)
+            AgentBrain.post_chat_memory_update(agent_id, memory_agent_dict, history)
             # If history was marked summarized, save it back
             agent_manager.update(agent_id, history_log=history)
         except Exception as e:

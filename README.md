@@ -73,6 +73,12 @@ The same pipeline backs all three surfaces — CLI, web dashboard, and a Telegra
 
 **Models:** every LLM call runs on local [Ollama](https://ollama.com) — no API key, no per-token cost — or on Gemini, OpenAI, Claude, DeepSeek, Grok and OpenRouter with your own keys. Critical paths use zero-token fast paths that never call a model at all.
 
+### Optional SearchClaw research sidecar
+
+TubeCLI includes a separate **SearchClaw Research** skill and Research Agent. When a SearchClaw service is available, it is used for deep, cited research; if it cannot be reached or returns an error, TubeCLI falls back to its existing DDGS web-search node. The existing Google Search skill and Search Agent remain available.
+
+Run SearchClaw separately (default: `http://127.0.0.1:8001`), then run `tubecli init` to register built-in skills/agents and configure the TubeCLI process with `TUBECLI_SEARCHCLAW_URL` if using another address and `TUBECLI_SEARCHCLAW_API_KEY` to match SearchClaw's bearer key. `SEARCHCLAW_URL` and `SEARCH_CLAW_API_KEY` are also recognized. Keep credentials in environment configuration, not workflow files. Research requests allow up to ten minutes; restart TubeCLI after changing its environment.
+
 **Also included:** WordPress publishing over the WP REST API, web crawling and change watching, video download, Google Sheets and Calendar, POD/graphic/content studios, and livestream restreaming.
 
 **What you get on `git clone`:** the agent runtime plus **17 built-in extensions** (`website_manager`, `browser`, `browser_scripts`, `codex`, `video_studio`, `multi_agents`, `cloud_api`, `market`, `ollama_manager`, `webui`, `auth_manager`, `calendar_manager`, `chat`, `douyin_downloader`, `file_manager`, `studio3d`, `universal_tracker`). A further **19 studios** — web crawler, video downloader, subtitle extractor, TTS, content/POD/graphic studio, livestream, sheets and more — install in one click from the in-dashboard marketplace.
