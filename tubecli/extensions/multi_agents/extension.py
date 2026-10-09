@@ -91,6 +91,76 @@ class AgentTeam:
                 node = TeamNode.from_dict(nd) if isinstance(nd, dict) else nd
                 self.nodes[node.role_id] = node
 
+    def validate_hierarchy(self) -> bool:
+        """Reject invalid links, cycles, and excessive hierarchy depth."""
+        max_depth = int(os.environ.get("TUBECLI_MAX_AGENT_DEPTH", "8"))
+        if max_depth < 0:
+            raise ValueError("TUBECLI_MAX_AGENT_DEPTH must be >= 0")
+
+        for role_id, node in self.nodes.items():
+            if role_id != node.role_id:
+                raise ValueError(f"Team node key mismatch: {role_id}")
+            for child_id in node.children:
+                if child_id not in self.nodes:
+                    raise ValueError(
+                        f"Role '{role_id}' references missing child '{child_id}'"
+                    )
+                child = self.nodes[child_id]
+                if child.parent != role_id:
+                    raise ValueError(
+                        f"Hierarchy parent mismatch: '{child_id}' must name "
+                        f"'{role_id}' as its parent"
+                    )
+            if node.parent is not None:
+                if node.parent not in self.nodes:
+                    raise ValueError(
+                        f"Role '{role_id}' references missing parent '{node.parent}'"
+                    )
+                if role_id not in self.nodes[node.parent].children:
+                    raise ValueError(
+                        f"Hierarchy child mismatch: parent '{node.parent}' "
+                        f"does not list '{role_id}'"
+                    )
+
+        visiting = set()
+        visited = set()
+
+        def visit(role_id: str, depth: int = 0) -> None:
+            if role_id in visiting:
+                raise ValueError(
+                    f"Circular agent hierarchy detected at role '{role_id}'"
+                )
+            if depth > max_depth:
+                raise ValueError(
+                    f"Agent hierarchy depth limit exceeded: maximum is {max_depth}"
+                )
+            if role_id in visited:
+                return
+            visiting.add(role_id)
+            for child_id in self.nodes[role_id].children:
+                visit(child_id, depth + 1)
+            visiting.remove(role_id)
+            visited.add(role_id)
+
+        for role_id in self.nodes:
+            visit(role_id)
+        return True
+
+    @staticmethod
+    def validate_call_budget() -> int:
+        """Return the configured positive maximum for agent calls."""
+        try:
+            limit = int(os.environ.get("TUBECLI_MAX_AGENT_CALLS", "12"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "TUBECLI_MAX_AGENT_CALLS must be a positive integer"
+            ) from exc
+        if limit < 1:
+            raise ValueError(
+                "TUBECLI_MAX_AGENT_CALLS must be a positive integer"
+            )
+        return limit
+
     def get_root_nodes(self) -> List[TeamNode]:
         """Get top-level nodes (no parent)."""
         return [n for n in self.nodes.values() if n.parent is None]
@@ -104,6 +174,8 @@ class AgentTeam:
 
     def get_org_chart(self) -> dict:
         """Build a nested org chart tree for UI rendering."""
+        self.validate_hierarchy()
+
         def build_tree(node: TeamNode) -> dict:
             return {
                 **node.to_dict(),
@@ -168,6 +240,7 @@ class Orchestrator:
             name=name, agent_ids=agent_ids or [], lead_agent_id=lead_agent_id or (agent_ids[0] if agent_ids else ""),
             strategy=strategy, description=description, template=template, nodes=nodes,
         )
+        team.validate_hierarchy()
         self._teams[team.id] = team
         self._save()
         return team
@@ -229,6 +302,7 @@ class Orchestrator:
             elif hasattr(team, key):
                 setattr(team, key, value)
 
+        team.validate_hierarchy()
         self._save()
         return team
 
@@ -272,6 +346,11 @@ class Orchestrator:
 
         results = []
         context_chain = task
+        try:
+            max_calls = AgentTeam.validate_call_budget()
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        calls_made = 0
 
         if team.strategy == "sequential":
             for agent_id in team.agent_ids:
@@ -281,6 +360,11 @@ class Orchestrator:
                     continue
                 agent_dict = agent.to_dict()
                 skills = [s.to_dict() for s in skill_manager.get_all()]
+                if calls_made >= max_calls:
+                    message = f"Agent call safety limit exceeded: maximum is {max_calls} calls."
+                    self._log_task(team_id, team.name, task, team.strategy, len(results))
+                    return {"status": "error", "message": message, "results": results}
+                calls_made += 1
                 brain_result = AgentBrain.chat(message=context_chain, agent=agent_dict, skills=skills)
                 results.append({
                     "agent_id": agent_id, "agent_name": agent.name,
@@ -297,6 +381,11 @@ class Orchestrator:
                     continue
                 agent_dict = agent.to_dict()
                 skills = [s.to_dict() for s in skill_manager.get_all()]
+                if calls_made >= max_calls:
+                    message = f"Agent call safety limit exceeded: maximum is {max_calls} calls."
+                    self._log_task(team_id, team.name, task, team.strategy, len(results))
+                    return {"status": "error", "message": message, "results": results}
+                calls_made += 1
                 brain_result = AgentBrain.chat(message=task, agent=agent_dict, skills=skills)
                 results.append({
                     "agent_id": agent_id, "agent_name": agent.name,
@@ -319,6 +408,13 @@ Your team members:
 {chr(10).join(member_names)}
 
 Analyze the task and respond with how to delegate. Reply normally — your response will be shared with team members for execution."""
+            if calls_made >= max_calls:
+                return {
+                    "status": "error",
+                    "message": f"Agent call safety limit exceeded: maximum is {max_calls} calls.",
+                    "results": results,
+                }
+            calls_made += 1
             brain_result = AgentBrain.chat(
                 message=delegation_prompt, agent=lead_dict, skills=[s.to_dict() for s in skill_manager.get_all()],
             )
@@ -337,9 +433,18 @@ Analyze the task and respond with how to delegate. Reply normally — your respo
         from tubecli.core.brain import AgentBrain
 
         results = []
+        try:
+            max_calls = AgentTeam.validate_call_budget()
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        calls_made = 0
+        budget_exceeded = False
 
         async def process_node(node: TeamNode, incoming_task: str, depth: int = 0):
             """Process a single node and recursively delegate to children."""
+            nonlocal calls_made, budget_exceeded
+            if budget_exceeded:
+                return
             agent = agent_manager.get(node.agent_id) if node.agent_id else None
 
             if not agent:
@@ -375,6 +480,18 @@ Process this task according to your role. If you have subordinates, indicate wha
 
             agent_dict = agent.to_dict()
             skills = [s.to_dict() for s in skill_manager.get_all()]
+            if calls_made >= max_calls:
+                budget_exceeded = True
+                results.append({
+                    "role_id": node.role_id,
+                    "role": node.role,
+                    "status": "error",
+                    "reply": f"Agent call safety limit exceeded: maximum is {max_calls} calls.",
+                    "depth": depth,
+                })
+                return
+
+            calls_made += 1
             brain_result = AgentBrain.chat(message=enhanced_prompt, agent=agent_dict, skills=skills)
             reply = brain_result.get("reply", "")
 
@@ -395,8 +512,16 @@ Process this task according to your role. If you have subordinates, indicate wha
         # Start from root nodes
         for root_node in team.get_root_nodes():
             await process_node(root_node, task)
+            if budget_exceeded:
+                break
 
         self._log_task(team.id, team.name, task, "hierarchy", len(results))
+        if budget_exceeded:
+            return {
+                "status": "error",
+                "message": f"Agent call safety limit exceeded: maximum is {max_calls} calls.",
+                "results": results,
+            }
         return {"status": "completed", "team": team.name, "strategy": "hierarchy", "results": results}
 
     def _log_task(self, team_id: str, team_name: str, task: str, strategy: str, agent_count: int):

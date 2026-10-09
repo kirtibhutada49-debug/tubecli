@@ -51,6 +51,24 @@ class WorkflowEngine:
         self.logs: List[ExecutionLog] = []
         self.node_outputs: Dict[str, Dict] = {}
 
+    @staticmethod
+    def validate_loop_limit() -> int:
+        """Return the configured positive maximum number of loop items."""
+        import os
+
+        try:
+            limit = int(os.environ.get("TUBECLI_MAX_LOOP_ITEMS", "100"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "TUBECLI_MAX_LOOP_ITEMS must be a positive integer"
+            ) from exc
+
+        if limit < 1:
+            raise ValueError(
+                "TUBECLI_MAX_LOOP_ITEMS must be a positive integer"
+            )
+        return limit
+
     def _log(self, node_id: str, node_name: str, status: str, message: str, data: Optional[Dict] = None):
         log = ExecutionLog(
             timestamp=datetime.now().strftime("%H:%M:%S"),
@@ -225,6 +243,18 @@ class WorkflowEngine:
                         items = items.strip().split("\n")
 
                     if isinstance(items, list) and len(items) > 0:
+                        max_items = self.validate_loop_limit()
+                        if len(items) > max_items:
+                            message = (
+                                f"Workflow loop safety limit exceeded: "
+                                f"{len(items)} items supplied; maximum is {max_items}. "
+                                "No items were processed."
+                            )
+                            self._log(node_id, self._name(node), "error", message)
+                            self.node_outputs[node_id] = {"error": message}
+                            # A safety-limit violation is a failure, not a user cancellation.
+                            break
+
                         downstream = self._get_downstream_nodes(node_id)
                         self._log(node_id, self._name(node), "started", f"Looping {len(items)} items")
 
